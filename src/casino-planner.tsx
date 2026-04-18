@@ -1057,6 +1057,9 @@ export default function App(){
 
   const loadFromSheets=async()=>{
     if(!gasUrl){ showToast("❌ Geen Google Sheets URL."); return; }
+    useEffect(() => {
+  loadFromSheets();
+}, []);
     try{
       const r=await fetch(gasUrl+"?action=load");
       const data=await r.json();
