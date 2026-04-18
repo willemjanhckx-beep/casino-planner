@@ -1057,18 +1057,33 @@ export default function App(){
 
   const loadFromSheets=async()=>{
     if(!gasUrl){ showToast("❌ Geen Google Sheets URL."); return; }
-    useEffect(() => {
-  loadFromSheets();
-}, []);
     try{
       const r=await fetch(gasUrl+"?action=load");
       const data=await r.json();
-      if(data.staff) setStaff(data.staff); if(data.schedule) setSchedule(data.schedule);
-      if(data.settings) setSettings(data.settings); if(data.holidays) setHolidays(data.holidays);
-      if(data.vacations) setVacations(data.vacations); if(data.locks) setLocks(data.locks);
+      setStaff(data.staff || []);
+setSchedule(data.schedule || []);
+setSettings(data.settings || {});
+setHolidays(data.holidays || []);
+setVacations(data.vacations || []);
+setLocks(data.locks || {});
+      isLoaded.current = true;
       showToast("✅ Data geladen van Sheets!");
     }catch{ showToast("❌ Fout bij laden van Sheets."); }
-  };
+  }; 
+
+  useEffect(() => {
+  loadFromSheets();
+}, []);
+  
+useEffect(() => {
+  if (!isLoaded.current) return;
+
+  const t = setTimeout(() => {
+    saveToSheets();
+  }, 800);
+
+  return () => clearTimeout(t);
+}, [staff, schedule, settings, holidays, vacations, locks]);
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
