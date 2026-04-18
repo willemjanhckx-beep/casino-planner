@@ -938,7 +938,7 @@ export default function App(){
   const [vacations,setVacations]=useState(()=>load(SK.vacations,VACATIONS_BY_YEAR[2026]||[]));
   const [locks,setLocks]=useState(()=>load(SK.locks,{}));
   const [lockDate,setLockDate]=useState(()=>load("co3_lockdate",null));
-  const [gasUrl,setGasUrl]=useState(()=>load(SK.gasUrl,""));
+  const [gasUrl,setGasUrl]=useState(()=>load(SK.gasUrl,"https://script.google.com/macros/s/AKfycbwLIOsHAfEuZrwryU6EqCmXZMT89mZ0Xw36bL7srECscXEj6NAhC2yxfFujiTR0ZyDb-g/exec"));
   const [generating,setGenerating]=useState(false);
   const [toast,setToast]=useState(null);
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
