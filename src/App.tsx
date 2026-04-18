@@ -1055,17 +1055,24 @@ export default function App(){
     }catch{ showToast("❌ Fout bij opslaan naar Sheets."); }
   };
 
-  const loadFromSheets=async()=>{
-    if(!gasUrl){ showToast("❌ Geen Google Sheets URL."); return; }
-    try{
-      const r=await fetch(gasUrl+"?action=load");
-      const data=await r.json();
-      if(data.staff) setStaff(data.staff); if(data.schedule) setSchedule(data.schedule);
-      if(data.settings) setSettings(data.settings); if(data.holidays) setHolidays(data.holidays);
-      if(data.vacations) setVacations(data.vacations); if(data.locks) setLocks(data.locks);
-      showToast("✅ Data geladen van Sheets!");
-    }catch{ showToast("❌ Fout bij laden van Sheets."); }
-  };
+const loadFromSheets = async () => {
+  if (!gasUrl) { showToast("❌ Geen Google Sheets URL."); return; }
+  try {
+    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+    const results: any = {};
+    for (const tab of tabs) {
+      const r = await fetch(`${gasUrl}?tab=${tab}`);
+      results[tab] = await r.json();
+    }
+    if (results.staff) setStaff(results.staff);
+    if (results.schedule) setSchedule(results.schedule);
+    if (results.settings) setSettings(results.settings);
+    if (results.holidays) setHolidays(results.holidays);
+    if (results.vacations) setVacations(results.vacations);
+    if (results.locks) setLocks(results.locks);
+    showToast("✅ Data geladen van Sheets!");
+  } catch { showToast("❌ Fout bij laden van Sheets."); }
+};
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
