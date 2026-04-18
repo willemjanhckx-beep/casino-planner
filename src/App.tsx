@@ -945,21 +945,33 @@ export default function App(){
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
   const actionCount=useRef(0);
 
-  // Auto-save
-  useEffect(()=>{ save(SK.staff,staff); },[staff]);
-  useEffect(()=>{ save(SK.schedule,schedule); },[schedule]);
-  useEffect(()=>{ save(SK.settings,settings); },[settings]);
-  useEffect(()=>{ save(SK.holidays,holidays); },[holidays]);
-  useEffect(()=>{ save(SK.vacations,vacations); },[vacations]);
-  useEffect(()=>{ save(SK.locks,locks); },[locks]);
-  useEffect(()=>{ save("co3_lockdate",lockDate); },[lockDate]);
-  useEffect(()=>{ save(SK.gasUrl,gasUrl); },[gasUrl]);
-  useEffect(()=>{ save("co3_motiv_on",motivatieEnabled); },[motivatieEnabled]);
-  useEffect(()=>{ save("co3_motiv_freq",motivatieFreq); },[motivatieFreq]);
-  useEffect(()=>{ save(SK.year,year); },[year]);
+// Auto-save lokaal
+useEffect(()=>{ save(SK.staff,staff); },[staff]);
+useEffect(()=>{ save(SK.schedule,schedule); },[schedule]);
+useEffect(()=>{ save(SK.settings,settings); },[settings]);
+useEffect(()=>{ save(SK.holidays,holidays); },[holidays]);
+useEffect(()=>{ save(SK.vacations,vacations); },[vacations]);
+useEffect(()=>{ save(SK.locks,locks); },[locks]);
+useEffect(()=>{ save("co3_lockdate",lockDate); },[lockDate]);
+useEffect(()=>{ save(SK.gasUrl,gasUrl); },[gasUrl]);
+useEffect(()=>{ save("co3_motiv_on",motivatieEnabled); },[motivatieEnabled]);
+useEffect(()=>{ save("co3_motiv_freq",motivatieFreq); },[motivatieFreq]);
+useEffect(()=>{ save(SK.year,year); },[year]);
 
-  const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
+// Auto-sync naar Sheets (met debounce van 2 seconden)
+const syncTimeout = useRef<ReturnType<typeof setTimeout>|null>(null);
+useEffect(()=>{
+  if(!gasUrl) return;
+  if(syncTimeout.current) clearTimeout(syncTimeout.current);
+  syncTimeout.current = setTimeout(()=>{ saveToSheets(); }, 2000);
+},[staff,schedule,settings,holidays,vacations,locks]);
 
+// Automatisch laden bij opstarten
+useEffect(()=>{
+  if(gasUrl) loadFromSheets();
+},[]);
+
+const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
   // Motivatie trigger
   const triggerMotivatieCheck=useCallback(()=>{
     if(!motivatieEnabled||motivatieFreq===0) return;
