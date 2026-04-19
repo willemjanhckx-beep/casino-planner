@@ -1178,50 +1178,50 @@ export default function App(){
     reader.readAsText(file); e.target.value="";
   };
 
-  const saveToSheets=async()=>{
-    if(!gasUrl){ showToast("❌ Geen Google Sheets URL."); return; }
-    try{
-      const tabs={staff,schedule,settings,holidays,vacations,locks};
-      for(const[tab,data] of Object.entries(tabs)){
-        await fetch(gasUrl,{method:"POST",body:JSON.stringify({tab,data})});
+  const saveToSheets = async () => {
+    if (!gasUrl) { showToast("❌ Geen Google Sheets URL."); return; }
+    try {
+      const tabs = {staff, schedule, settings, holidays, vacations, locks};
+      for (const [tab, data] of Object.entries(tabs)) {
+        await fetch(gasUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({tab, data})
+        });
       }
       showToast("✅ Opgeslagen naar Google Sheets!");
-    }catch{ showToast("❌ Fout bij opslaan naar Sheets."); }
+    } catch { showToast("❌ Fout bij opslaan naar Sheets."); }
   };
 
   const loadFromSheets = async () => {
-  if (!gasUrl) { showToast("❌ Geen Google Sheets URL."); return; }
-  try {
-    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
-    const results: any = {};
-    for (const tab of tabs) {
-      const r = await fetch(`${gasUrl}?tab=${tab}&t=${Date.now()}`);
-      results[tab] = await r.json();
-    }
-    if (results.staff)     setStaff(results.staff);
-    if (results.schedule)  setSchedule(results.schedule);
-    if (results.settings)  setSettings(results.settings);
-    if (results.holidays)  setHolidays(results.holidays);
-    if (results.vacations) setVacations(results.vacations);
-    if (results.locks)     setLocks(results.locks);
-    isLoaded.current = true;
-    showToast("✅ Data geladen van Sheets!");
-  } catch { showToast("❌ Fout bij laden van Sheets."); }
-};
+    if (!gasUrl) { showToast("❌ Geen Google Sheets URL."); return; }
+    try {
+      const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+      const results: Record<string, any> = {};
+      for (const tab of tabs) {
+        const r = await fetch(`${gasUrl}?tab=${tab}&t=${Date.now()}`);
+        results[tab] = await r.json();
+      }
+      if (results.staff)     setStaff(results.staff);
+      if (results.schedule)  setSchedule(results.schedule);
+      if (results.settings)  setSettings(results.settings);
+      if (results.holidays)  setHolidays(results.holidays);
+      if (results.vacations) setVacations(results.vacations);
+      if (results.locks)     setLocks(results.locks);
+      isLoaded.current = true;
+      showToast("✅ Data geladen van Sheets!");
+    } catch { showToast("❌ Fout bij laden van Sheets."); }
+  };
 
-useEffect(() => {
-  if (gasUrl) loadFromSheets();
-}, []);
-  
-useEffect(() => {
-  if (!isLoaded.current) return;
+  useEffect(() => {
+    if (gasUrl) loadFromSheets();
+  }, []);
 
-  const t = setTimeout(() => {
-    saveToSheets();
-  }, 800);
-
-  return () => clearTimeout(t);
-}, [staff, schedule, settings, holidays, vacations, locks]);
+  useEffect(() => {
+    if (!isLoaded.current) return;
+    const t = setTimeout(() => { saveToSheets(); }, 800);
+    return () => clearTimeout(t);
+  }, [staff, schedule, settings, holidays, vacations, locks]);
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
