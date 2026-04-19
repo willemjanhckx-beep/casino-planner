@@ -545,18 +545,17 @@ const handleSelect=useCallback((shiftId)=>{
         setTimeout(()=>setUnavailWarn(null),4000);
       }
     }
-        setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
-    // Auto-lock bij handmatige aanpassing, maar alleen als cel nog niet expliciet unlocked was
-    // Vakantie en ziekte altijd locken
+           setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
+    // Vakantie/ziekte altijd locken
+    // Expliciet ontgrendelde cellen (false) blijven unlocked na aanpassing
+    // Alle andere handmatige aanpassingen worden gelockt
     if(shiftId==="vacation"||shiftId==="sick"){
       setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
-    } else if(!locks[lockKey(staffId,dateStr)]){
+    } else if(locks[lockKey(staffId,dateStr)]!==false){
       setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
     }
-    // Als de cel al gelockt was → lock behouden (geen wijziging nodig)
-    // Als de cel expliciet unlocked was → unlocked laten, inhoud wel aangepast
+  },[picker,setSchedule,staff,schedule,year,setLocks,locks]);
 
-  },[picker,setSchedule,staff,schedule,year,setLocks]);
 
 
   const handleToggleLock=useCallback(()=>{
@@ -564,14 +563,15 @@ const handleSelect=useCallback((shiftId)=>{
     const {staffId,dateStr}=picker;
     const k=lockKey(staffId,dateStr);
     const currentShift=(schedule[staffId]||{})[dateStr];
-    // Vakantie en ziekte kunnen niet manueel ontgrendeld worden via deze knop
     if(locks[k]&&(currentShift==="vacation"||currentShift==="sick")){
       setUnavailWarn("⚠️ Vakantie en ziekte kunnen enkel ontgrendeld worden door de shift te wijzigen.");
       setTimeout(()=>setUnavailWarn(null),4000);
       return;
     }
-    setLocks(prev=>({...prev,[k]:!prev[k]}));
+    // Expliciet false = bewust ontgrendeld, undefined/true = normaal gedrag
+    setLocks(prev=>({...prev,[k]:prev[k]?false:true}));
   },[picker,setLocks,schedule,locks,setUnavailWarn]);
+
 
 
   // Coverage
