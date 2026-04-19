@@ -545,9 +545,17 @@ const handleSelect=useCallback((shiftId)=>{
         setTimeout(()=>setUnavailWarn(null),4000);
       }
     }
-    setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
-    // Auto-lock elke handmatige aanpassing
-    setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
+        setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
+    // Auto-lock bij handmatige aanpassing, maar alleen als cel nog niet expliciet unlocked was
+    // Vakantie en ziekte altijd locken
+    if(shiftId==="vacation"||shiftId==="sick"){
+      setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
+    } else if(!locks[lockKey(staffId,dateStr)]){
+      setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
+    }
+    // Als de cel al gelockt was → lock behouden (geen wijziging nodig)
+    // Als de cel expliciet unlocked was → unlocked laten, inhoud wel aangepast
+
   },[picker,setSchedule,staff,schedule,year,setLocks]);
 
 
