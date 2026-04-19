@@ -1275,7 +1275,7 @@ const importJSON=(e)=>{
     }
     try {
       const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
-      const results: Record<string, any> = {};
+      const results = {};
       for (const tab of tabs) {
         try {
           const r = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
