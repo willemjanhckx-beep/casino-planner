@@ -123,12 +123,66 @@ function getWeeksInYear(y){
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
 // ─── GENERATOR ───────────────────────────────────────────────────────────────
+
+// ─── OPERATIONELE WERKDAG ─────────────────────────────────────────────────────
+const OP_DAY_START = 15;   // 15:00
+const OP_DAY_END   = 29.5; // 05:30 volgende dag (15 + 14.5)
+const AVG_SHIFT_DURATION = 7; // gemiddelde shiftduur in uren
+
+// Mogelijke shiftstarturen binnen operationeel venster
+const SHIFT_START_OPTIONS = [15, 16, 17, 18, 19, 20, 21, 22];
+
+// Helper: genereer een shift startuur op basis van positie in werkblok
+// Achterwaarts: eerste dag = laat, laatste dag = vroeg
+function generateShiftStart(posFromEnd: number, blockLen: number): number {
+  // posFromEnd 0 = laatste dag (vroegste start)
+  // posFromEnd n = eerste dag (laatste start)
+  const ratio = posFromEnd / Math.max(blockLen - 1, 1);
+  // ratio 0 = vroeg (15:00), ratio 1 = laat (22:00)
+  const startIdx = Math.round(ratio * (SHIFT_START_OPTIONS.length - 1));
+  return SHIFT_START_OPTIONS[startIdx];
+}
+
+// Helper: bereken shiftduur (altijd ~7 uur, max 05:30)
+function generateShiftDuration(startHour: number): number {
+  const maxEnd = OP_DAY_END;
+  const preferredEnd = startHour + AVG_SHIFT_DURATION;
+  // Begrens op einde van operationele dag
+  const actualEnd = Math.min(preferredEnd, maxEnd);
+  return actualEnd - startHour;
+}
+
+// Helper: leid shift label af op basis van startuur
+function deriveShiftLabel(startHour: number, duration: number): string {
+  const endHour = startHour + duration;
+  const midpoint = startHour + duration / 2;
+  // Normaliseer midpoint naar 0-24
+  const mid = midpoint >= 24 ? midpoint - 24 : midpoint;
+  if (mid < 18) return "dag";
+  if (mid < 23) return "avond";
+  return "nacht";
+}
+
+// Helper: formatteer uur naar tijdstring (bv 21.5 → "21:30")
+function formatHour(h: number): string {
+  const normalized = h >= 24 ? h - 24 : h;
+  const hh = Math.floor(normalized);
+  const mm = Math.round((normalized - hh) * 60);
+  return `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+}
+
 // Helper: bereken einduur van een shift op een bepaalde dag (in absolute uren)
-function getShiftEndAbsolute(ds: string, shiftId: string): number {
+function getShiftEndAbsolute(ds: string, shiftId: string, dynamicShifts?: Record<string, any>): number {
+  // Eerst proberen uit dynamische shifts
+  if (dynamicShifts && dynamicShifts[ds]) {
+    const date = new Date(ds);
+    const dayStart = Math.floor(date.getTime() / (1000 * 60 * 60));
+    return dayStart + dynamicShifts[ds].startHour + dynamicShifts[ds].duration;
+  }
+  // Fallback naar vaste SHIFTS
   const shift = SHIFTS[shiftId?.toUpperCase()];
   if (!shift || shift.hours === 0) return 0;
   const date = new Date(ds);
-  // Dag in uren vanaf epoch (vereenvoudigd)
   const dayStart = Math.floor(date.getTime() / (1000 * 60 * 60));
   return dayStart + shift.startHour + shift.hours;
 }
@@ -174,15 +228,15 @@ function buildWorkBlocks(staff: any[], year: number): Record<number, string[]> {
     let workDays: number;
     let freeDays: number;
 
-    if (s.fte >= 1.0)      { workDays = 5; freeDays = 3; }
+    if (s.fte >= 1.0)      { workDays = 5; freeDays = 2; }
     else if (s.fte >= 0.8) { workDays = 4; freeDays = 2; }
-    else                   { workDays = 5; freeDays = 3; }
+    else                   { workDays = 3; freeDays = 3; }
 
     const cycleLen = workDays + freeDays;
 
-    // Offset per medewerker zodat niet iedereen tegelijk vrij is
-    const offset = (idx * Math.floor(cycleLen / Math.max(staff.length, 1))) % cycleLen;
-
+// Verdeel medewerkers gelijkmatig over de cyclus
+    const offset = (idx * Math.round(cycleLen / Math.max(staff.length, 1)) + idx) % cycleLen;
+    
     // Bouw dagpatroon voor heel het jaar
     const startOfYear = new Date(year, 0, 1);
     const endOfYear = new Date(year, 11, 31);
@@ -275,6 +329,16 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
   all.forEach(s=>{ schedule[s.id]={...(existingSchedule[s.id]||{})}; });
   const stats={};
   const workBlocks = buildWorkBlocks(all, year);
+  
+  // Opslag voor dynamische shift tijden per medewerker per dag
+  const dynamicShiftData: Record<number, Record<string, {
+    startHour: number;
+    duration: number;
+    label: string;
+    timeString: string;
+  }>> = {};
+  all.forEach(s => { dynamicShiftData[s.id] = {}; });
+  
   all.forEach(s=>{ stats[s.id]={weekendShifts:0,nightShifts:0,totalHours:0,consecutiveNights:0}; });
   const lockDateObj=lockDate?new Date(lockDate):null;
 
@@ -317,39 +381,65 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
     const assigned=new Set();
     all.forEach(s=>{ if(locks[lockKey(s.id,ds)]) assigned.add(s.id); });
 
-    let eveningAssigned=0;
-    for(const s of sorted){
-      if(eveningAssigned>=demand.evening) break;
-      if(assigned.has(s.id)) continue;
-      const dayIdx=getDayIndex(d,year);
-      const {posInBlock,blockLen}=getBlockPosition(workBlocks,s.id,dayIdx);
-      const shiftType=s.isFlexijob
-        ?(isWeekend(d)?"night":"evening")
-        :getShiftForBlockPosition(posInBlock,blockLen,isWeekend(d));
-      if(shiftType==="morning") continue;
-      schedule[s.id][ds]=shiftType;
-      stats[s.id].totalHours+=SHIFTS[shiftType.toUpperCase()].hours;
+let eveningAssigned = 0;
+    for (const s of sorted) {
+      if (eveningAssigned >= demand.evening) break;
+      if (assigned.has(s.id)) continue;
+
+      const dayIdx = getDayIndex(d, year);
+      const { posInBlock, blockLen } = getBlockPosition(workBlocks, s.id, dayIdx);
+      const posFromEnd = blockLen - 1 - posInBlock;
+
+      // Genereer variabele shift tijden
+      const startHour = generateShiftStart(posFromEnd, blockLen);
+      const duration = generateShiftDuration(startHour);
+      const label = deriveShiftLabel(startHour, duration);
+
+      // Sla op als avond/nacht (startuur >= 18)
+      if (startHour < 18) continue;
+
+      const shiftId = label === "dag" ? "morning" : label === "avond" ? "evening" : "night";
+      schedule[s.id][ds] = shiftId;
+      dynamicShiftData[s.id][ds] = {
+        startHour,
+        duration,
+        label,
+        timeString: `${formatHour(startHour)}–${formatHour(startHour + duration)}`
+      };
+      stats[s.id].totalHours += duration;
       stats[s.id].consecutiveNights++;
-      if(isWeekend(d)) stats[s.id].weekendShifts++;
+      if (isWeekend(d)) stats[s.id].weekendShifts++;
       stats[s.id].nightShifts++;
       assigned.add(s.id);
       eveningAssigned++;
     }
 
-    let morningAssigned=0;
-    for(const s of sorted){
-      if(morningAssigned>=demand.morning) break;
-      if(assigned.has(s.id)) continue;
-      const dayIdx=getDayIndex(d,year);
-      const {posInBlock,blockLen}=getBlockPosition(workBlocks,s.id,dayIdx);
-      const shiftType=s.isFlexijob
-        ?"morning"
-        :getShiftForBlockPosition(posInBlock,blockLen,isWeekend(d));
-      if(shiftType!=="morning") continue;
-      schedule[s.id][ds]="morning";
-      stats[s.id].totalHours+=SHIFTS.MORNING.hours;
-      stats[s.id].consecutiveNights=0;
-      if(isWeekend(d)) stats[s.id].weekendShifts++;
+    let morningAssigned = 0;
+    for (const s of sorted) {
+      if (morningAssigned >= demand.morning) break;
+      if (assigned.has(s.id)) continue;
+
+      const dayIdx = getDayIndex(d, year);
+      const { posInBlock, blockLen } = getBlockPosition(workBlocks, s.id, dayIdx);
+      const posFromEnd = blockLen - 1 - posInBlock;
+
+      const startHour = generateShiftStart(posFromEnd, blockLen);
+      const duration = generateShiftDuration(startHour);
+      const label = deriveShiftLabel(startHour, duration);
+
+      // Sla op als dagshift (startuur < 18)
+      if (startHour >= 18) continue;
+
+      schedule[s.id][ds] = "morning";
+      dynamicShiftData[s.id][ds] = {
+        startHour,
+        duration,
+        label,
+        timeString: `${formatHour(startHour)}–${formatHour(startHour + duration)}`
+      };
+      stats[s.id].totalHours += duration;
+      stats[s.id].consecutiveNights = 0;
+      if (isWeekend(d)) stats[s.id].weekendShifts++;
       assigned.add(s.id);
       morningAssigned++;
     }
@@ -369,7 +459,7 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
     });
   }
 
-  return {schedule,stats};
+  return { schedule, stats, dynamicShiftData };
 }
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
