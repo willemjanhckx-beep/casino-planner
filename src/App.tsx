@@ -2,12 +2,12 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const SHIFTS = {
-  MORNING:  { id:"morning",  label:"Dag",     time:"15:00–21:00", hours:6,   color:"#f59e0b", bg:"#78350f" },
-  EVENING:  { id:"evening",  label:"Avond",   time:"21:00–05:00", hours:8,   color:"#3b82f6", bg:"#1e3a5f" },
-  NIGHT:    { id:"night",    label:"Nacht",   time:"21:00–05:30", hours:8.5, color:"#8b5cf6", bg:"#3b0764" },
-  OFF:      { id:"off",      label:"Vrij",    time:"",            hours:0,   color:"#374151", bg:"#111827" },
-  VACATION: { id:"vacation", label:"Vakantie",time:"",            hours:0,   color:"#065f46", bg:"#022c22" },
-  SICK:     { id:"sick",     label:"Ziek",    time:"",            hours:0,   color:"#7f1d1d", bg:"#450a0a" },
+  MORNING:  { id:"morning",  label:"Dag",     time:"15:00–21:00", startHour:15, endHour:21,  hours:6,   color:"#f59e0b", bg:"#78350f" },
+  EVENING:  { id:"evening",  label:"Avond",   time:"21:00–05:00", startHour:21, endHour:29,  hours:8,   color:"#3b82f6", bg:"#1e3a5f" },
+  NIGHT:    { id:"night",    label:"Nacht",   time:"21:00–05:30", startHour:21, endHour:29.5,hours:8.5, color:"#8b5cf6", bg:"#3b0764" },
+  OFF:      { id:"off",      label:"Vrij",    time:"",            startHour:0,  endHour:0,   hours:0,   color:"#374151", bg:"#111827" },
+  VACATION: { id:"vacation", label:"Vakantie",time:"",            startHour:0,  endHour:0,   hours:0,   color:"#065f46", bg:"#022c22" },
+  SICK:     { id:"sick",     label:"Ziek",    time:"",            startHour:0,  endHour:0,   hours:0,   color:"#7f1d1d", bg:"#450a0a" },
 };
 const FTE_VACATION = { 1.0:24, 0.8:19, 0.5:12 };
 const CONTRACT_TYPES = [
@@ -917,9 +917,19 @@ function StorageView({onExport,onImport,gasUrl,setGasUrl,onSaveToSheets,onLoadFr
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS={
-  minMorning:4,minEvening:8,weekendMinMorning:4,weekendMinEvening:10,
-  vacMinMorning:6,vacMinEvening:10,
-  maxConsecNights:4,minRestAfterNights:2,maxConsecDays:5,minRestHours:11,
+  minMorning:4,
+  minEvening:8,
+  minNight:10,
+  weekendMinMorning:4,
+  weekendMinEvening:8,
+  weekendMinNight:10,
+  vacMinMorning:4,
+  vacMinEvening:8,
+  vacMinNight:10,
+  maxConsecNights:4,
+  minRestAfterNights:2,
+  maxConsecDays:5,
+  minRestHours:11,
 };
 
 // Build year range 2026–2036+
