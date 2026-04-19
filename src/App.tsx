@@ -90,7 +90,7 @@ function getWeekDates(year,week){
   const start=new Date(s); start.setDate(s.getDate()+(week-1)*7);
   return Array.from({length:7},(_,i)=>{ const d=new Date(start); d.setDate(start.getDate()+i); return d; });
 }
-function toDS(date){ return date.toISOString().slice(0,10); }
+function toDS(date){   const y = date.getFullYear();   const m = String(date.getMonth() + 1).padStart(2, "0");   const d = String(date.getDate()).padStart(2, "0");   return `${y}-${m}-${d}`; }
 function isHoliday(ds,holidays){ return holidays.includes(ds); }
 function isSchoolVacation(ds,vacations){ return vacations.some(v=>ds>=v.start&&ds<=v.end); }
 function isWeekend(date){ const d=date.getDay(); return d===0||d===6; }
