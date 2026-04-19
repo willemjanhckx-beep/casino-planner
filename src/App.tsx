@@ -239,31 +239,76 @@ function getDaysInYear(year) {
  * voor het volledige jaar. Het patroon is gebaseerd op FTE en wordt
  * gelijkmatig verspreid over het team via een offset.
  */
+/**
+ * Bouwt een werkblok-patroon per medewerker voor het volledige jaar.
+ *
+ * Kernwijziging: de cyclus wordt berekend op basis van het aantal
+ * beschikbare dagen van de medewerker, niet een vaste 7-daagse week.
+ * Doel: 4–5 werkdagen en 2–3 vrije dagen per beschikbare week.
+ */
 function buildWorkBlocks(staff, year) {
   const totalDays = getDaysInYear(year);
-  const patterns = {};
+  const patterns  = {};
 
   staff.forEach((s, idx) => {
-    // Flexijobbers zijn altijd beschikbaar
+
+    // Flexijobbers: altijd beschikbaar, geen patroon nodig
     if (s.isFlexijob) {
       patterns[s.id] = Array(totalDays).fill("work");
       return;
     }
 
-    let workDays, freeDays;
-    if (s.fte >= 1.0)      { workDays = 5; freeDays = 2; }
-    else if (s.fte >= 0.8) { workDays = 4; freeDays = 2; }
-    else                   { workDays = 3; freeDays = 3; }
+    // Hoeveel dagen per week is deze medewerker contractueel beschikbaar?
+    const availPerWeek = s.availableDays ? s.availableDays.length : 7;
 
+    // Bereken werkdagen en vrije dagen op basis van FTE én beschikbaarheid.
+    // Doel: ~4–5 werkdagen per beschikbare week voor voltijds,
+    //       proportioneel minder voor deeltijds.
+    let workDays, freeDays;
+
+    if (s.fte >= 1.0) {
+      // Voltijds: 5 werkdagen, rest vrij
+      workDays = Math.min(5, availPerWeek);
+      freeDays = Math.max(availPerWeek - workDays, 2);
+    } else if (s.fte >= 0.8) {
+      // 4/5: 4 werkdagen
+      workDays = Math.min(4, availPerWeek);
+      freeDays = Math.max(availPerWeek - workDays, 1);
+    } else {
+      // Halftijds: 3 werkdagen
+      workDays = Math.min(3, availPerWeek);
+      freeDays = Math.max(availPerWeek - workDays, 1);
+    }
+
+    // Cyclus = werkdagen + vrije dagen (enkel over beschikbare dagen)
     const cycleLen = workDays + freeDays;
 
-    // Verdeel medewerkers gelijkmatig over de cyclus
+    // Spreid medewerkers gelijkmatig over de cyclus
+    // zodat niet iedereen tegelijk vrij heeft
     const offset = Math.floor((idx * cycleLen) / Math.max(staff.length, 1)) % cycleLen;
 
+    // Bouw het dagpatroon voor het volledige jaar.
+    // Belangrijk: we tellen ALLEEN beschikbare dagen mee in de cyclus.
+    // Op niet-beschikbare dagen (bv. maandag voor iemand die ma niet werkt)
+    // zetten we altijd "off" — de availableDays-check in generateSchedule
+    // doet dit toch al, maar dit maakt het patroon consistent.
     const days = [];
+    let availableDayCounter = 0; // telt enkel beschikbare dagen
+
     for (let i = 0; i < totalDays; i++) {
-      const posInCycle = (i + offset) % cycleLen;
-      days.push(posInCycle < workDays ? "work" : "off");
+      const date = new Date(year, 0, 1);
+      date.setDate(date.getDate() + i);
+      const dow = (date.getDay() + 6) % 7; // 0=ma … 6=zo
+
+      if (!s.availableDays || s.availableDays.includes(dow)) {
+        // Beschikbare dag: volg het cyclus-patroon
+        const posInCycle = (availableDayCounter + offset) % cycleLen;
+        days.push(posInCycle < workDays ? "work" : "off");
+        availableDayCounter++;
+      } else {
+        // Niet-beschikbare dag: altijd vrij
+        days.push("off");
+      }
     }
 
     patterns[s.id] = days;
@@ -271,6 +316,15 @@ function buildWorkBlocks(staff, year) {
 
   return patterns;
 }
+
+
+/**
+ * getDaysInYear — ongewijzigd, hier herhaald voor volledigheid.
+ */
+function getDaysInYear(year) {
+  return ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 366 : 365;
+}
+
 
 /**
  * Bepaalt de positie en lengte van het huidige werkblok
