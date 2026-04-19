@@ -553,9 +553,18 @@ const handleSelect=useCallback((shiftId)=>{
 
   const handleToggleLock=useCallback(()=>{
     if(!picker) return;
-    const k=lockKey(picker.staffId,picker.dateStr);
+    const {staffId,dateStr}=picker;
+    const k=lockKey(staffId,dateStr);
+    const currentShift=(schedule[staffId]||{})[dateStr];
+    // Vakantie en ziekte kunnen niet manueel ontgrendeld worden via deze knop
+    if(locks[k]&&(currentShift==="vacation"||currentShift==="sick")){
+      setUnavailWarn("⚠️ Vakantie en ziekte kunnen enkel ontgrendeld worden door de shift te wijzigen.");
+      setTimeout(()=>setUnavailWarn(null),4000);
+      return;
+    }
     setLocks(prev=>({...prev,[k]:!prev[k]}));
-  },[picker,setLocks]);
+  },[picker,setLocks,schedule,locks,setUnavailWarn]);
+
 
   // Coverage
   const coverage=dates.map(date=>{
