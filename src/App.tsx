@@ -1045,7 +1045,7 @@ function doPost(e) {
 }
 
 // ─── SETTINGS VIEW ────────────────────────────────────────────────────────────
-function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq}){
+function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq,showToast}){
   const [newHoliday,setNewHoliday]=useState("");
   const [newVacName,setNewVacName]=useState("");
   const [newVacStart,setNewVacStart]=useState("");
@@ -1240,8 +1240,9 @@ export default function App(){
   const [toast,setToast]=useState(null);
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
-  const actionCount=useRef(0);
+  const actionCount = useRef(0);
   const isLoaded = useRef(false);
+  const [isAppReady, setIsAppReady] = useState(false); // ← toevoegen
 
 // Auto-save lokaal
 useEffect(()=>{ save(SK.staff,staff); },[staff]);
@@ -1357,30 +1358,35 @@ const importJSON=(e)=>{
   }, [staff, schedule, settings, holidays, vacations, locks]);
 
   const loadFromSheets = useCallback(async () => {
-  const url = load(SK.gasUrl, "");
-  if (!url) return;
-  try {
-    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
-    const results: Record<string, any> = {};
-    for (const tab of tabs) {
-      try {
-        const r = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
-        const text = await r.text();
-        if (text && text !== "{}") {
-          results[tab] = JSON.parse(text);
-        }
-      } catch { /* sla foute tab gewoon over */ }
+    const url = load(SK.gasUrl, "");
+    if (!url) {
+      setIsAppReady(true); // geen Sheets URL → gewoon doorgaan
+      return;
     }
-    if (results.staff && Array.isArray(results.staff)) setStaff(results.staff);
-    if (results.schedule && typeof results.schedule === "object") setSchedule(results.schedule);
-    if (results.settings && typeof results.settings === "object") setSettings(results.settings);
-    if (results.holidays && Array.isArray(results.holidays)) setHolidays(results.holidays);
-    if (results.vacations && Array.isArray(results.vacations)) setVacations(results.vacations);
-    if (results.locks && typeof results.locks === "object") setLocks(results.locks);
-    isLoaded.current = true;
-    showToast("✅ Data geladen van Sheets!");
-  } catch { showToast("❌ Fout bij laden van Sheets."); }
-}, []);
+    try {
+      const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+      const results: Record<string, any> = {};
+      for (const tab of tabs) {
+        try {
+          const r = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
+          const text = await r.text();
+          if (text && text !== "{}") results[tab] = JSON.parse(text);
+        } catch {}
+      }
+      if (results.staff && Array.isArray(results.staff))           setStaff(results.staff);
+      if (results.schedule && typeof results.schedule === "object") setSchedule(results.schedule);
+      if (results.settings && typeof results.settings === "object") setSettings(results.settings);
+      if (results.holidays && Array.isArray(results.holidays))     setHolidays(results.holidays);
+      if (results.vacations && Array.isArray(results.vacations))   setVacations(results.vacations);
+      if (results.locks && typeof results.locks === "object")       setLocks(results.locks);
+      isLoaded.current = true;
+      showToast("✅ Data geladen van Sheets!");
+    } catch {
+      showToast("❌ Fout bij laden van Sheets.");
+    } finally {
+      setIsAppReady(true); // altijd klaar zetten, ook bij fout
+    }
+  }, []);
 
   useEffect(() => { loadFromSheets(); }, []);
 
@@ -1409,7 +1415,21 @@ const importJSON=(e)=>{
   return(
     <>
       <style>{style}</style>
-      <div className="app">
+
+      {!isAppReady && (
+        <div style={{
+          position:"fixed", inset:0, background:"var(--bg)",
+          display:"flex", flexDirection:"column",
+          alignItems:"center", justifyContent:"center",
+          zIndex:999, gap:16
+        }}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--gold)"}}>Casino Oostende</div>
+          <div style={{fontSize:13,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".15em"}}>Planner laden...</div>
+          <div style={{width:48,height:48,border:"3px solid var(--border)",borderTop:"3px solid var(--gold)",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+        </div>
+      )}
+
+      <div className="app" style={{opacity:isAppReady?1:0,pointerEvents:isAppReady?"auto":"none"}}>
         <div className="sidebar">
           <div className="sidebar-logo">
             <div className="logo-main">Casino Oostende</div>
@@ -1426,12 +1446,13 @@ const importJSON=(e)=>{
             </div>
             <div className="nav-section">
               <div className="nav-label">Acties</div>
-              <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={generateRoster} disabled={generating}>
+              <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={generateRoster} disabled={generating||!isAppReady}>
                 {generating?"⏳ Bezig...":"🎲 Genereer Rooster"}
               </button>
               <div style={{marginTop:8,padding:"8px 10px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8}}>
                 <div style={{fontSize:10,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".1em",marginBottom:4}}>🔒 Lock tot datum</div>
                 <input type="date" value={lockDate||""} onChange={e=>setLockDate(e.target.value||null)}
+                  disabled={!isAppReady}
                   style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",color:lockDate?"var(--yellow)":"var(--text-dim)",padding:"5px 8px",borderRadius:6,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}/>
                 {lockDate&&<div style={{fontSize:10,color:"var(--yellow)",marginTop:4}}>Beschermd tot {lockDate}</div>}
               </div>
@@ -1447,18 +1468,18 @@ const importJSON=(e)=>{
           <div className="topbar">
             <div className="topbar-title">{topbarTitle}</div>
             <div className="topbar-actions">
-              <select className="year-select" value={year} onChange={e=>handleYearChange(e.target.value)}>
+              <select className="year-select" value={year} onChange={e=>handleYearChange(e.target.value)} disabled={!isAppReady}>
                 {YEAR_RANGE.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
               {view==="week"&&(
                 <>
-                  <button className="btn" onClick={()=>setWeekNum(w=>Math.max(1,w-1))}>← Vorige</button>
+                  <button className="btn" onClick={()=>setWeekNum(w=>Math.max(1,w-1))} disabled={!isAppReady}>← Vorige</button>
                   <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"var(--text-dim)",minWidth:48,textAlign:"center"}}>W{weekNum}/{weeksInYear}</span>
-                  <button className="btn" onClick={()=>setWeekNum(w=>Math.min(weeksInYear,w+1))}>Volgende →</button>
+                  <button className="btn" onClick={()=>setWeekNum(w=>Math.min(weeksInYear,w+1))} disabled={!isAppReady}>Volgende →</button>
                 </>
               )}
-              <button className="btn" onClick={exportCSV}>⬇ CSV</button>
-              <button className="btn" onClick={exportJSON}>💾 Backup</button>
+              <button className="btn" onClick={exportCSV} disabled={!isAppReady}>⬇ CSV</button>
+              <button className="btn" onClick={exportJSON} disabled={!isAppReady}>💾 Backup</button>
             </div>
           </div>
 
@@ -1467,7 +1488,7 @@ const importJSON=(e)=>{
             {view==="year"&&<YearView schedule={schedule} staff={staff} year={year} holidays={holidays} vacations={vacations} settings={settings} onDayClick={ds=>{setWeekNum(getISOWeek(new Date(ds)));setView("week");showToast(`📅 Genavigeerd naar ${ds}`);}}/>}
             {view==="stats"&&<StaffStats staff={staff} schedule={schedule} year={year} holidays={holidays}/>}
             {view==="staff"&&<StaffManager staff={staff} setStaff={setStaff} schedule={schedule} year={year}/>}
-            {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq}/>}
+            {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq} showToast={showToast}/>}
             {view==="storage"&&<StorageView onExport={exportJSON} onImport={importJSON} gasUrl={gasUrl} setGasUrl={setGasUrl} onSaveToSheets={saveToSheets} onLoadFromSheets={loadFromSheets}/>}
           </div>
         </div>
