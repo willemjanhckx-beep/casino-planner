@@ -1214,7 +1214,25 @@ export default function App(){
   };
 
   useEffect(() => {
-    if (gasUrl) loadFromSheets();
+    const url = load(SK.gasUrl, "");
+    if (!url) return;
+    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+    const results: Record<string, any> = {};
+    Promise.all(
+      tabs.map(tab =>
+        fetch(`${url}?tab=${tab}&t=${Date.now()}`)
+          .then(r => r.json())
+          .then(data => { results[tab] = data; })
+      )
+    ).then(() => {
+      if (results.staff)     setStaff(results.staff);
+      if (results.schedule)  setSchedule(results.schedule);
+      if (results.settings)  setSettings(results.settings);
+      if (results.holidays)  setHolidays(results.holidays);
+      if (results.vacations) setVacations(results.vacations);
+      if (results.locks)     setLocks(results.locks);
+      isLoaded.current = true;
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
