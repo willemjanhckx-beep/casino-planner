@@ -521,10 +521,21 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
   const weeksInYear=getWeeksInYear(year);
 
   const handleShiftClick=useCallback((e,staffId,dateStr,isLocked)=>{
-    if(isLocked) return;
-    const ds=dateStr;
+    const rawLock=locks[lockKey(staffId,dateStr)];
+    // Geblokkeerd door globale lockdate → niet aanpasbaar
     const lockDateObj=lockDate?new Date(lockDate):null;
-    if(lockDateObj&&new Date(ds)<=lockDateObj){ setUnavailWarn("🔒 Deze datum is globaal gelockt."); setTimeout(()=>setUnavailWarn(null),3000); return; }
+    if(lockDateObj&&new Date(dateStr)<=lockDateObj){
+      setUnavailWarn("🔒 Deze datum is globaal gelockt.");
+      setTimeout(()=>setUnavailWarn(null),3000);
+      return;
+    }
+    // Cel is gelockt maar mag wel aangepast worden (lock beschermt enkel tegen auto-generatie)
+    // Enige uitzondering: globale lockdate hierboven
+
+    e.stopPropagation();
+    setPicker({x:e.clientX,y:e.clientY,staffId,dateStr});
+  },[lockDate,locks,setUnavailWarn]);
+
     e.stopPropagation();
     setPicker({x:e.clientX,y:e.clientY,staffId,dateStr});
   },[lockDate]);
