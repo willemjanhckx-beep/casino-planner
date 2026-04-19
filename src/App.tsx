@@ -123,6 +123,37 @@ function getWeeksInYear(y){
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
 // ─── GENERATOR ───────────────────────────────────────────────────────────────
+// Helper: bereken einduur van een shift op een bepaalde dag (in absolute uren)
+function getShiftEndAbsolute(ds: string, shiftId: string): number {
+  const shift = SHIFTS[shiftId?.toUpperCase()];
+  if (!shift || shift.hours === 0) return 0;
+  const date = new Date(ds);
+  // Dag in uren vanaf epoch (vereenvoudigd)
+  const dayStart = Math.floor(date.getTime() / (1000 * 60 * 60));
+  return dayStart + shift.startHour + shift.hours;
+}
+
+// Helper: controleer minimum rust tussen twee shifts
+function hasEnoughRest(
+  prevDs: string,
+  prevShiftId: string,
+  nextDs: string,
+  nextShiftId: string,
+  minRestHours: number
+): boolean {
+  const prevShift = SHIFTS[prevShiftId?.toUpperCase()];
+  const nextShift = SHIFTS[nextShiftId?.toUpperCase()];
+  if (!prevShift || !nextShift) return true;
+  if (prevShift.hours === 0 || nextShift.hours === 0) return true;
+
+  const prevEnd = getShiftEndAbsolute(prevDs, prevShiftId);
+  const nextDate = new Date(nextDs);
+  const nextDayStart = Math.floor(nextDate.getTime() / (1000 * 60 * 60));
+  const nextStart = nextDayStart + nextShift.startHour;
+
+  return (nextStart - prevEnd) >= minRestHours;
+}
+
 function generateSchedule(staff,year,settings,holidays,vacations,existingSchedule,locks,lockDate){
   const schedule={};
   const regular=staff.filter(s=>!s.isFlexijob&&s.autoSchedule!==false);
@@ -139,10 +170,26 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
     const isoWeek=getISOWeek(d);
     const demand=getDayDemand(ds,settings,holidays,vacations);
 
-    const available=all.filter(s=>{
+   const available=all.filter(s=>{
       if(locks[lockKey(s.id,ds)]) return false;
       if(!isAvailOnDate(s,ds,isoWeek)) return false;
       if(stats[s.id].consecutiveNights>=settings.maxConsecNights) return false;
+
+      // Minimum rust check
+      const prevDate = new Date(d);
+      prevDate.setDate(prevDate.getDate() - 1);
+      const prevDs = toDS(prevDate);
+      const prevShift = (schedule[s.id]||{})[prevDs];
+      if (prevShift && prevShift !== "off" && prevShift !== "vacation" && prevShift !== "sick") {
+        // Check voor dag shift na avond/nacht shift
+        const demandShifts = ["morning", "evening", "night"];
+        for (const candidateShift of demandShifts) {
+          if (!hasEnoughRest(prevDs, prevShift, ds, candidateShift, settings.minRestHours || 11)) {
+            if (candidateShift === "morning") return false;
+          }
+        }
+      }
+
       return true;
     });
 
