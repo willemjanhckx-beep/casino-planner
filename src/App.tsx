@@ -1054,9 +1054,20 @@ function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVa
   const upd=(k,v)=>setSettings(s=>({...s,[k]:parseFloat(v)||v}));
   const freqLabels=["Nooit","Zelden","Normaal","Vaak"];
 
-  return(
+return(
     <div>
       {showGasInfo&&<GasInfoModal onClose={()=>setShowGasInfo(false)}/>}
+
+      {/* Reset knop */}
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
+        <button className="btn btn-danger" onClick={()=>{
+          setSettings(DEFAULT_SETTINGS);
+          showToast("🔄 Instellingen gereset naar standaard");
+        }}>
+          🔄 Reset naar standaardinstellingen
+        </button>
+      </div>
+
       <div className="settings-grid">
         <div className="settings-section">
           <div className="settings-title">⚙️ Bezettingsnormen</div>
