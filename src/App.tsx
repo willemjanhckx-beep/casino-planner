@@ -154,6 +154,119 @@ function hasEnoughRest(
   return (nextStart - prevEnd) >= minRestHours;
 }
 
+// Helper: genereer werkblok-patroon per medewerker voor het hele jaar
+function buildWorkBlocks(staff: any[], year: number): Record<number, string[]> {
+  const weeksInYear = getWeeksInYear(year);
+  const patterns: Record<number, string[]> = {};
+
+  staff.forEach((s, idx) => {
+    const days: string[] = [];
+
+    if (s.isFlexijob) {
+      // Flexijob: altijd beschikbaar
+      for (let i = 0; i < 365; i++) days.push("work");
+      patterns[s.id] = days;
+      return;
+    }
+
+    // Bepaal patroon op basis van FTE
+    // Bij rustige periodes krijgen voltijdse medewerkers 5-3 in plaats van 5-2
+    let workDays: number;
+    let freeDays: number;
+
+    if (s.fte >= 1.0)      { workDays = 5; freeDays = 3; }
+    else if (s.fte >= 0.8) { workDays = 4; freeDays = 2; }
+    else                   { workDays = 5; freeDays = 3; }
+
+    const cycleLen = workDays + freeDays;
+
+    // Offset per medewerker zodat niet iedereen tegelijk vrij is
+    const offset = (idx * Math.floor(cycleLen / Math.max(staff.length, 1))) % cycleLen;
+
+    // Bouw dagpatroon voor heel het jaar
+    const startOfYear = new Date(year, 0, 1);
+    const endOfYear = new Date(year, 11, 31);
+
+   for (let d = new Date(startOfYear); d <= endOfYear; d.setDate(d.getDate() + 1)) {
+      const dayOfYear = Math.floor((d.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24));
+      const posInCycle = (dayOfYear + offset) % cycleLen;
+      days.push(posInCycle < workDays ? "work" : "off");
+    }
+
+    patterns[s.id] = days;
+  });
+
+  return patterns;
+}
+
+// Helper: geef dag-index in het jaar (0-364)
+function getDayIndex(date: Date, year: number): number {
+  const startOfYear = new Date(year, 0, 1);
+  return Math.floor((date.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// Helper: bepaal shift type op basis van positie in werkblok (achterwaarts)
+// Positie 0 = eerste dag van blok (nacht), laatste dag = dagshift
+function getShiftForBlockPosition(
+  posInBlock: number,
+  blockLen: number,
+  isWeekendDay: boolean
+): string {
+  // Bereken positie vanaf het einde van het blok
+  const posFromEnd = blockLen - 1 - posInBlock;
+
+  if (posFromEnd === 0) {
+    // Laatste dag van blok → dagshift
+    return "morning";
+  } else if (posFromEnd === 1) {
+    // Tweede laatste dag → avondshift
+    return "evening";
+  } else {
+    // Alle andere dagen → nacht
+    return isWeekendDay ? "night" : "evening";
+  }
+}
+
+// Helper: bepaal positie en lengte van huidig werkblok voor een medewerker op een dag
+function getBlockPosition(
+  workBlocks: Record<number, string[]>,
+  staffId: number,
+  dayIdx: number
+): { posInBlock: number; blockLen: number } {
+  const block = workBlocks[staffId];
+  if (!block || block[dayIdx] !== "work") return { posInBlock: 0, blockLen: 1 };
+
+  // Zoek begin van huidig werkblok
+  let blockStart = dayIdx;
+  while (blockStart > 0 && block[blockStart - 1] === "work") blockStart--;
+
+  // Zoek einde van huidig werkblok
+  let blockEnd = dayIdx;
+  while (blockEnd < block.length - 1 && block[blockEnd + 1] === "work") blockEnd++;
+
+  return {
+    posInBlock: dayIdx - blockStart,
+    blockLen: blockEnd - blockStart + 1
+  };
+}
+
+// Helper: controleer of bezetting al voldoende is voor een dag
+function isCoverageSufficient(
+  ds: string,
+  currentSchedule: Record<number, Record<string, string>>,
+  staff: any[],
+  demand: { morning: number; evening: number }
+): boolean {
+  let morning = 0;
+  let evening = 0;
+  staff.forEach(s => {
+    const sh = (currentSchedule[s.id] || {})[ds];
+    if (sh === "morning") morning++;
+    if (sh === "evening" || sh === "night") evening++;
+  });
+  return morning >= demand.morning && evening >= demand.evening;
+}
+
 function generateSchedule(staff,year,settings,holidays,vacations,existingSchedule,locks,lockDate){
   const schedule={};
   const regular=staff.filter(s=>!s.isFlexijob&&s.autoSchedule!==false);
@@ -161,6 +274,7 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
   const all=[...regular,...flexi];
   all.forEach(s=>{ schedule[s.id]={...(existingSchedule[s.id]||{})}; });
   const stats={};
+  const workBlocks = buildWorkBlocks(all, year);
   all.forEach(s=>{ stats[s.id]={weekendShifts:0,nightShifts:0,totalHours:0,consecutiveNights:0}; });
   const lockDateObj=lockDate?new Date(lockDate):null;
 
@@ -170,26 +284,27 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
     const isoWeek=getISOWeek(d);
     const demand=getDayDemand(ds,settings,holidays,vacations);
 
-   const available=all.filter(s=>{
+    const available=all.filter(s=>{
       if(locks[lockKey(s.id,ds)]) return false;
       if(!isAvailOnDate(s,ds,isoWeek)) return false;
       if(stats[s.id].consecutiveNights>=settings.maxConsecNights) return false;
-
-      // Minimum rust check
-      const prevDate = new Date(d);
-      prevDate.setDate(prevDate.getDate() - 1);
-      const prevDs = toDS(prevDate);
-      const prevShift = (schedule[s.id]||{})[prevDs];
-      if (prevShift && prevShift !== "off" && prevShift !== "vacation" && prevShift !== "sick") {
-        // Check voor dag shift na avond/nacht shift
-        const demandShifts = ["morning", "evening", "night"];
-        for (const candidateShift of demandShifts) {
-          if (!hasEnoughRest(prevDs, prevShift, ds, candidateShift, settings.minRestHours || 11)) {
-            if (candidateShift === "morning") return false;
+      if(!s.isFlexijob){
+        const dayIdx=getDayIndex(d,year);
+        const block=workBlocks[s.id];
+        if(block&&block[dayIdx]==="off") return false;
+      }
+      const prevDate=new Date(d);
+      prevDate.setDate(prevDate.getDate()-1);
+      const prevDs=toDS(prevDate);
+      const prevShift=(schedule[s.id]||{})[prevDs];
+      if(prevShift&&prevShift!=="off"&&prevShift!=="vacation"&&prevShift!=="sick"){
+        const demandShifts=["morning","evening","night"];
+        for(const candidateShift of demandShifts){
+          if(!hasEnoughRest(prevDs,prevShift,ds,candidateShift,settings.minRestHours||11)){
+            if(candidateShift==="morning") return false;
           }
         }
       }
-
       return true;
     });
 
@@ -200,26 +315,37 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
     });
 
     const assigned=new Set();
-    // preserve locks
     all.forEach(s=>{ if(locks[lockKey(s.id,ds)]) assigned.add(s.id); });
 
     let eveningAssigned=0;
     for(const s of sorted){
       if(eveningAssigned>=demand.evening) break;
       if(assigned.has(s.id)) continue;
-      const shiftType=(d.getDay()===0||d.getDay()===6)?"night":"evening";
+      const dayIdx=getDayIndex(d,year);
+      const {posInBlock,blockLen}=getBlockPosition(workBlocks,s.id,dayIdx);
+      const shiftType=s.isFlexijob
+        ?(isWeekend(d)?"night":"evening")
+        :getShiftForBlockPosition(posInBlock,blockLen,isWeekend(d));
+      if(shiftType==="morning") continue;
       schedule[s.id][ds]=shiftType;
-      stats[s.id].totalHours+=SHIFTS.EVENING.hours;
+      stats[s.id].totalHours+=SHIFTS[shiftType.toUpperCase()].hours;
       stats[s.id].consecutiveNights++;
       if(isWeekend(d)) stats[s.id].weekendShifts++;
       stats[s.id].nightShifts++;
       assigned.add(s.id);
       eveningAssigned++;
     }
+
     let morningAssigned=0;
     for(const s of sorted){
       if(morningAssigned>=demand.morning) break;
       if(assigned.has(s.id)) continue;
+      const dayIdx=getDayIndex(d,year);
+      const {posInBlock,blockLen}=getBlockPosition(workBlocks,s.id,dayIdx);
+      const shiftType=s.isFlexijob
+        ?"morning"
+        :getShiftForBlockPosition(posInBlock,blockLen,isWeekend(d));
+      if(shiftType!=="morning") continue;
       schedule[s.id][ds]="morning";
       stats[s.id].totalHours+=SHIFTS.MORNING.hours;
       stats[s.id].consecutiveNights=0;
@@ -227,11 +353,24 @@ function generateSchedule(staff,year,settings,holidays,vacations,existingSchedul
       assigned.add(s.id);
       morningAssigned++;
     }
+
     all.forEach(s=>{ if(!assigned.has(s.id)){ schedule[s.id][ds]="off"; stats[s.id].consecutiveNights=0; } });
+
+    // Rustige periodes
+    all.forEach(s=>{
+      if(assigned.has(s.id)) return;
+      if(s.isFlexijob) return;
+      const dayIdx=getDayIndex(d,year);
+      const block=workBlocks[s.id];
+      if(block&&block[dayIdx]==="work"){
+        const sufficient=isCoverageSufficient(ds,schedule,all,demand);
+        if(sufficient){ schedule[s.id][ds]="off"; }
+      }
+    });
   }
+
   return {schedule,stats};
 }
-
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap');
