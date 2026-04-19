@@ -529,7 +529,7 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     setPicker({x:e.clientX,y:e.clientY,staffId,dateStr});
   },[lockDate]);
 
-  const handleSelect=useCallback((shiftId)=>{
+const handleSelect=useCallback((shiftId)=>{
     if(!picker) return;
     const {staffId,dateStr}=picker;
     const s=staff.find(x=>x.id===staffId);
@@ -546,11 +546,10 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
       }
     }
     setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
-    // auto-lock vacation/sick
-    if(shiftId==="vacation"||shiftId==="sick"){
-      setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
-    }
+    // Auto-lock elke handmatige aanpassing
+    setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
   },[picker,setSchedule,staff,schedule,year,setLocks]);
+
 
   const handleToggleLock=useCallback(()=>{
     if(!picker) return;
