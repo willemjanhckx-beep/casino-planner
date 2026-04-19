@@ -124,189 +124,99 @@ function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
 // ─── GENERATOR ───────────────────────────────────────────────────────────────
 
-// ─── CONSTANTS (extern gedefinieerd, hier als referentie) ────────────────────
-// SHIFTS, toDS, getISOWeek, getWeeksInYear, getDayDemand,
-// isAvailOnDate, isWeekend, lockKey — worden extern aangeleverd.
-
-// ─── SHIFT POOLS ─────────────────────────────────────────────────────────────
 const SHIFT_POOLS = [
   { start: 15.0, duration: 7.0 },
   { start: 16.5, duration: 7.0 },
   { start: 18.0, duration: 7.5 },
   { start: 19.0, duration: 7.0 },
-  { start: 20.0, duration: 8.0 },
+  { start: 20.0, duration: 7.5 },
   { start: 21.0, duration: 8.0 },
-  { start: 22.0, duration: 7.5 },
+  { start: 22.5, duration: 7.0 },
 ];
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-/**
- * Geeft een consistente shift uit SHIFT_POOLS voor een medewerker,
- * gebaseerd op hun ID en positie in het werkblok.
- * Vroeger in het blok (posFromEnd groter) → latere shift.
- * Later in het blok (posFromEnd kleiner) → vroegere shift.
- */
-function getPersonalShift(staffId, posFromEnd, blockLen) {
-  const len = SHIFT_POOLS.length;
-  const baseIdx = staffId % len;
-  // ratio loopt van 0 (begin blok) naar 1 (einde blok)
-  const ratio = posFromEnd / Math.max(blockLen - 1, 1);
-  // Hoog posFromEnd → hoog idx (late shift). Laag posFromEnd → laag idx (vroege shift).
-  const idx = Math.min(Math.floor(ratio * (len - 1 - baseIdx) + baseIdx), len - 1);
-  return SHIFT_POOLS[Math.max(0, idx)];
+function getPersonalShift(staffId, dayOfYear, hoursRatio) {
+  const len        = SHIFT_POOLS.length;
+  const personBase = (staffId * 3) % len;
+  const dayVariant = dayOfYear % len;
+  const rawIdx     = Math.floor((personBase * 0.6 + dayVariant * 0.4 + hoursRatio * 2) % len);
+  return SHIFT_POOLS[Math.max(0, Math.min(rawIdx, len - 1))];
 }
 
-/**
- * Formateert een decimaal uur (bv. 22.5) naar "HH:MM".
- * Uren >= 24 worden gewrapped naar de volgende dag.
- */
-function formatHour(h) {
-  const normalized = h >= 24 ? h - 24 : h;
-  const hh = Math.floor(normalized);
-  const mm = Math.round((normalized - hh) * 60);
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-}
-
-/**
- * Leidt een shift-ID af uit het startuur.
- * < 18:00 → "morning", 18–21 → "evening", >= 21 → "night"
- */
 function deriveShiftId(startHour) {
   if (startHour < 18) return "morning";
   if (startHour < 21) return "evening";
   return "night";
 }
 
-/**
- * Geeft het jaardoelaantal uren voor een medewerker.
- * Flexijobbers hebben geen limiet.
- */
 function getTargetHours(s) {
   if (s.isFlexijob) return 9999;
   return s.fte * 38 * 52;
 }
 
-/**
- * Berekent het absolute einduur (in uren sinds epoch) van een shift.
- */
 function getShiftEndAbsolute(ds, shiftId) {
   const shift = SHIFTS[shiftId?.toUpperCase()];
   if (!shift || shift.hours === 0) return 0;
-  const date = new Date(ds);
-  const dayStartHours = date.getTime() / (1000 * 60 * 60);
+  const dayStartHours = new Date(ds).getTime() / (1000 * 60 * 60);
   return dayStartHours + shift.startHour + shift.hours;
 }
 
-/**
- * Controleert of er genoeg rust zit tussen de vorige shift en het
- * vroegst mogelijke starttijdstip van de nieuwe dag (15:00 = OP_DAY_START).
- * Dit is conservatiever dan checken op de exacte volgende shift,
- * maar correct omdat we de volgende shift nog niet kennen bij het filteren.
- */
 function hasEnoughRest(prevDs, prevShiftId, nextDs, minRestHours) {
   const prevShift = SHIFTS[prevShiftId?.toUpperCase()];
   if (!prevShift || prevShift.hours === 0) return true;
-
   const prevEnd = getShiftEndAbsolute(prevDs, prevShiftId);
   if (prevEnd === 0) return true;
-
-  const nextDate = new Date(nextDs);
-  const nextDayStartHours = nextDate.getTime() / (1000 * 60 * 60);
-  // Vroegst mogelijke start op de volgende dag = 15:00
-  const earliestNextStart = nextDayStartHours + 15;
-
+  const earliestNextStart = new Date(nextDs).getTime() / (1000 * 60 * 60) + 15;
   return (earliestNextStart - prevEnd) >= minRestHours;
 }
 
-/**
- * Geeft de dag-index binnen het jaar terug (0 = 1 jan, 364/365 = 31 dec).
- */
 function getDayIndex(date, year) {
   const startOfYear = new Date(year, 0, 1);
   return Math.floor((date.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-/**
- * Geeft het aantal dagen in een jaar terug (365 of 366 voor schrikkeljaar).
- */
 function getDaysInYear(year) {
   return ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 366 : 365;
 }
 
-/**
- * Bouwt een werkblok-patroon (array van "work"/"off") voor elke medewerker
- * voor het volledige jaar. Het patroon is gebaseerd op FTE en wordt
- * gelijkmatig verspreid over het team via een offset.
- */
-/**
- * Bouwt een werkblok-patroon per medewerker voor het volledige jaar.
- *
- * Kernwijziging: de cyclus wordt berekend op basis van het aantal
- * beschikbare dagen van de medewerker, niet een vaste 7-daagse week.
- * Doel: 4–5 werkdagen en 2–3 vrije dagen per beschikbare week.
- */
 function buildWorkBlocks(staff, year) {
-  const totalDays = getDaysInYear(year);
-  const patterns  = {};
+  const totalDays   = getDaysInYear(year);
+  const startOfYear = new Date(year, 0, 1);
+  const patterns    = {};
 
   staff.forEach((s, idx) => {
-
-    // Flexijobbers: altijd beschikbaar, geen patroon nodig
     if (s.isFlexijob) {
       patterns[s.id] = Array(totalDays).fill("work");
       return;
     }
 
-    // Hoeveel dagen per week is deze medewerker contractueel beschikbaar?
     const availPerWeek = s.availableDays ? s.availableDays.length : 7;
 
-    // Bereken werkdagen en vrije dagen op basis van FTE én beschikbaarheid.
-    // Doel: ~4–5 werkdagen per beschikbare week voor voltijds,
-    //       proportioneel minder voor deeltijds.
-    let workDays, freeDays;
+    let workDays;
+    if      (s.fte >= 1.0) workDays = Math.min(5, availPerWeek);
+    else if (s.fte >= 0.8) workDays = Math.min(4, availPerWeek);
+    else                   workDays = Math.min(3, availPerWeek);
 
-    if (s.fte >= 1.0) {
-      // Voltijds: 5 werkdagen, rest vrij
-      workDays = Math.min(5, availPerWeek);
-      freeDays = Math.max(availPerWeek - workDays, 2);
-    } else if (s.fte >= 0.8) {
-      // 4/5: 4 werkdagen
-      workDays = Math.min(4, availPerWeek);
-      freeDays = Math.max(availPerWeek - workDays, 1);
-    } else {
-      // Halftijds: 3 werkdagen
-      workDays = Math.min(3, availPerWeek);
-      freeDays = Math.max(availPerWeek - workDays, 1);
-    }
-
-    // Cyclus = werkdagen + vrije dagen (enkel over beschikbare dagen)
+    const freeDays = Math.max(availPerWeek - workDays, 0);
     const cycleLen = workDays + freeDays;
 
-    // Spreid medewerkers gelijkmatig over de cyclus
-    // zodat niet iedereen tegelijk vrij heeft
-    const offset = Math.floor((idx * cycleLen) / Math.max(staff.length, 1)) % cycleLen;
+    if (cycleLen === 0) {
+      patterns[s.id] = Array(totalDays).fill("work");
+      return;
+    }
 
-    // Bouw het dagpatroon voor het volledige jaar.
-    // Belangrijk: we tellen ALLEEN beschikbare dagen mee in de cyclus.
-    // Op niet-beschikbare dagen (bv. maandag voor iemand die ma niet werkt)
-    // zetten we altijd "off" — de availableDays-check in generateSchedule
-    // doet dit toch al, maar dit maakt het patroon consistent.
-    const days = [];
-    let availableDayCounter = 0; // telt enkel beschikbare dagen
+    const offset = Math.floor((idx * cycleLen) / Math.max(staff.length, 1)) % cycleLen;
+    const days   = [];
+    let availCounter = 0;
 
     for (let i = 0; i < totalDays; i++) {
-      const date = new Date(year, 0, 1);
-      date.setDate(date.getDate() + i);
-      const dow = (date.getDay() + 6) % 7; // 0=ma … 6=zo
+      const date = new Date(startOfYear.getTime() + i * 86400000);
+      const dow  = (date.getDay() + 6) % 7;
 
       if (!s.availableDays || s.availableDays.includes(dow)) {
-        // Beschikbare dag: volg het cyclus-patroon
-        const posInCycle = (availableDayCounter + offset) % cycleLen;
+        const posInCycle = (availCounter + offset) % cycleLen;
         days.push(posInCycle < workDays ? "work" : "off");
-        availableDayCounter++;
+        availCounter++;
       } else {
-        // Niet-beschikbare dag: altijd vrij
         days.push("off");
       }
     }
@@ -317,19 +227,6 @@ function buildWorkBlocks(staff, year) {
   return patterns;
 }
 
-
-/**
- * getDaysInYear — ongewijzigd, hier herhaald voor volledigheid.
- */
-function getDaysInYear(year) {
-  return ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 366 : 365;
-}
-
-
-/**
- * Bepaalt de positie en lengte van het huidige werkblok
- * waarbinnen een medewerker op een bepaalde dag valt.
- */
 function getBlockPosition(workBlocks, staffId, dayIdx) {
   const block = workBlocks[staffId];
   if (!block || block[dayIdx] !== "work") return { posInBlock: 0, blockLen: 1 };
@@ -340,18 +237,11 @@ function getBlockPosition(workBlocks, staffId, dayIdx) {
   let blockEnd = dayIdx;
   while (blockEnd < block.length - 1 && block[blockEnd + 1] === "work") blockEnd++;
 
-  return {
-    posInBlock: dayIdx - blockStart,
-    blockLen: blockEnd - blockStart + 1,
-  };
+  return { posInBlock: dayIdx - blockStart, blockLen: blockEnd - blockStart + 1 };
 }
 
-/**
- * Controleert of de huidige bezetting voor een dag al voldoet aan de minimumvraag.
- */
 function isCoverageSufficient(ds, currentSchedule, staff, demand) {
-  let morning = 0;
-  let evening = 0;
+  let morning = 0, evening = 0;
   staff.forEach(s => {
     const sh = (currentSchedule[s.id] || {})[ds];
     if (sh === "morning") morning++;
@@ -360,172 +250,118 @@ function isCoverageSufficient(ds, currentSchedule, staff, demand) {
   return morning >= demand.morning && evening >= demand.evening;
 }
 
-// ─── GENERATOR ────────────────────────────────────────────────────────────────
-
 function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
-  const schedule = {};
   const regular = staff.filter(s => !s.isFlexijob && s.autoSchedule !== false);
   const flexi   = staff.filter(s =>  s.isFlexijob && s.autoSchedule !== false);
-  const all = [...regular, ...flexi];
+  const all     = [...regular, ...flexi];
 
-  // Kopieer bestaand rooster als basis (o.a. manuele locks en vakantie)
-  all.forEach(s => {
-    schedule[s.id] = { ...(existingSchedule[s.id] || {}) };
-  });
-
-  const stats = {};
+  const schedule    = {};
+  const stats       = {};
   const hoursWorked = {};
-  const workBlocks = buildWorkBlocks(all, year);
+  const workBlocks  = buildWorkBlocks(all, year);
 
   all.forEach(s => {
-    stats[s.id] = {
-      weekendShifts: 0,
-      nightShifts: 0,
-      totalHours: 0,
-      consecutiveNights: 0,
-    };
+    schedule[s.id]    = { ...(existingSchedule[s.id] || {}) };
     hoursWorked[s.id] = 0;
+    stats[s.id]       = { weekendShifts: 0, nightShifts: 0, totalHours: 0, consecutiveNights: 0 };
   });
 
   const lockDateObj = lockDate ? new Date(lockDate) : null;
 
   for (let d = new Date(year, 0, 1); d <= new Date(year, 11, 31); d.setDate(d.getDate() + 1)) {
-    const ds = toDS(d);
+    const ds     = toDS(d);
+    const dayIdx = getDayIndex(d, year);
 
-    // Sla gelockte datums over — bestaande shifts blijven staan
     if (lockDateObj && d <= lockDateObj) continue;
 
     const isoWeek = getISOWeek(d);
     const demand  = getDayDemand(ds, settings, holidays, vacations);
 
-    // Bepaal wie beschikbaar is op deze dag
+    // Beschikbaarheidsfilter
+    // workBlocks is een ZACHTE voorkeur: wie onder zijn uren zit mag ook op "off"-dagen werken
     const available = all.filter(s => {
-      // Individueel gelockte cel → niet overschrijven
-      if (locks[lockKey(s.id, ds)]) return false;
+      if (locks[lockKey(s.id, ds)])                                    return false;
+      if (!isAvailOnDate(s, ds, isoWeek))                              return false;
+      if (stats[s.id].consecutiveNights >= settings.maxConsecNights)   return false;
+      if (hoursWorked[s.id] >= getTargetHours(s) * 1.10)              return false;
 
-      // Beschikbaarheidsdagen (contractueel)
-      if (!isAvailOnDate(s, ds, isoWeek)) return false;
-
-      // Max opeenvolgende nachtdiensten bereikt
-      if (stats[s.id].consecutiveNights >= settings.maxConsecNights) return false;
-
-      // Vaste medewerkers: alleen inplannen op "work"-dagen
-      if (!s.isFlexijob) {
-        const dayIdx = getDayIndex(d, year);
-        const block  = workBlocks[s.id];
-        if (block && block[dayIdx] === "off") return false;
-      }
-
-      // Niet meer dan 5% boven jaardoeluren
-      const target = getTargetHours(s);
-      if (hoursWorked[s.id] >= target * 1.05) return false;
-
-      // Minimum rusttijd na vorige shift
-      const prevDate = new Date(d);
+      // Rustcheck tov vorige dag
+      const prevDate  = new Date(d);
       prevDate.setDate(prevDate.getDate() - 1);
       const prevDs    = toDS(prevDate);
       const prevShift = (schedule[s.id] || {})[prevDs];
-      if (prevShift && prevShift !== "off" && prevShift !== "vacation" && prevShift !== "sick") {
-        if (!hasEnoughRest(prevDs, prevShift, ds, settings.minRestHours || 11)) {
-          return false;
-        }
+      if (prevShift && !["off","vacation","sick"].includes(prevShift)) {
+        if (!hasEnoughRest(prevDs, prevShift, ds, settings.minRestHours || 11)) return false;
       }
 
       return true;
     });
 
-    // Sorteer op uren-achterstand (wie het verste achterloopt, gaat voor)
+    // Prioriteit: wie het verst onder jaardoel zit gaat voor
+    // Tiebreaker: workBlocks "work"-dag heeft voorkeur boven "off"-dag
     const sorted = [...available].sort((a, b) => {
       const ratioA = hoursWorked[a.id] / Math.max(getTargetHours(a), 1);
       const ratioB = hoursWorked[b.id] / Math.max(getTargetHours(b), 1);
-      return ratioA - ratioB;
+      if (Math.abs(ratioA - ratioB) > 0.01) return ratioA - ratioB;
+      const aWork = workBlocks[a.id]?.[dayIdx] === "work" ? 0 : 1;
+      const bWork = workBlocks[b.id]?.[dayIdx] === "work" ? 0 : 1;
+      return aWork - bWork;
     });
 
-    // Gelockte cellen tellen al mee als toegewezen
     const assigned = new Set();
     all.forEach(s => { if (locks[lockKey(s.id, ds)]) assigned.add(s.id); });
 
-    // ── 1. Eerst avond/nacht bezetting invullen (hogere prioriteit) ──────────
+    // 1. Avond/nacht bezetting
     let eveningAssigned = 0;
     for (const s of sorted) {
       if (eveningAssigned >= demand.evening) break;
       if (assigned.has(s.id)) continue;
 
-      const dayIdx = getDayIndex(d, year);
-      const { posInBlock, blockLen } = getBlockPosition(workBlocks, s.id, dayIdx);
-      const posFromEnd = blockLen - 1 - posInBlock;
-      const shift = getPersonalShift(s.id, posFromEnd, blockLen);
-
-      // Sla over als dit een dagshift zou worden
+      const hoursRatio = hoursWorked[s.id] / Math.max(getTargetHours(s), 1);
+      const shift      = getPersonalShift(s.id, dayIdx, hoursRatio);
       if (shift.start < 18) continue;
 
       const shiftId = deriveShiftId(shift.start);
-      schedule[s.id][ds] = shiftId;
-      hoursWorked[s.id]  += shift.duration;
+      schedule[s.id][ds]      = shiftId;
+      hoursWorked[s.id]      += shift.duration;
       stats[s.id].totalHours += shift.duration;
 
-      // consecutiveNights enkel verhogen bij echte nachtshift
-      if (shiftId === "night") {
-        stats[s.id].consecutiveNights++;
-        stats[s.id].nightShifts++;
-      } else {
-        // Avondshift reset de nacht-teller
-        stats[s.id].consecutiveNights = 0;
-      }
+      if (shiftId === "night") { stats[s.id].consecutiveNights++; stats[s.id].nightShifts++; }
+      else                     { stats[s.id].consecutiveNights = 0; }
 
       if (isWeekend(d)) stats[s.id].weekendShifts++;
       assigned.add(s.id);
       eveningAssigned++;
     }
 
-    // ── 2. Dan dagbezetting invullen ─────────────────────────────────────────
+    // 2. Dagbezetting
     let morningAssigned = 0;
     for (const s of sorted) {
       if (morningAssigned >= demand.morning) break;
       if (assigned.has(s.id)) continue;
 
-      const dayIdx = getDayIndex(d, year);
-      const { posInBlock, blockLen } = getBlockPosition(workBlocks, s.id, dayIdx);
-      const posFromEnd = blockLen - 1 - posInBlock;
-      const shift = getPersonalShift(s.id, posFromEnd, blockLen);
-
-      // Sla over als dit een avond/nachtshift zou worden
+      const hoursRatio = hoursWorked[s.id] / Math.max(getTargetHours(s), 1);
+      const shift      = getPersonalShift(s.id, dayIdx, hoursRatio);
       if (shift.start >= 18) continue;
 
-      schedule[s.id][ds] = "morning";
-      hoursWorked[s.id]  += shift.duration;
-      stats[s.id].totalHours += shift.duration;
-      stats[s.id].consecutiveNights = 0;
+      schedule[s.id][ds]             = "morning";
+      hoursWorked[s.id]             += shift.duration;
+      stats[s.id].totalHours        += shift.duration;
+      stats[s.id].consecutiveNights  = 0;
 
       if (isWeekend(d)) stats[s.id].weekendShifts++;
       assigned.add(s.id);
       morningAssigned++;
     }
 
-    // ── 3. Niet ingeplanden krijgen vrij ─────────────────────────────────────
+    // 3. Niet-ingeplanden krijgen vrij
     all.forEach(s => {
       if (assigned.has(s.id)) return;
-      schedule[s.id][ds] = "off";
+      schedule[s.id][ds]            = "off";
       stats[s.id].consecutiveNights = 0;
     });
-
-    // ── 4. Overbezetting bij rustige periodes afvlakken ───────────────────────
-    // Medewerkers die op een "work"-dag staan maar niet nodig zijn → vrij
-    if (isCoverageSufficient(ds, schedule, all, demand)) {
-      all.forEach(s => {
-        if (s.isFlexijob) return;
-        if (locks[lockKey(s.id, ds)]) return;
-        const dayIdx = getDayIndex(d, year);
-        const block  = workBlocks[s.id];
-        // Alleen aanpassen als het werkblok "work" zegt maar persoon niet kritisch is
-        if (block && block[dayIdx] === "work" && schedule[s.id][ds] === "off") {
-          // Al "off" gezet in stap 3, coverage is voldoende → geen actie nodig
-        }
-      });
-    }
   }
 
-  // Statistieken afronden
   all.forEach(s => {
     stats[s.id].targetHours  = Math.round(getTargetHours(s));
     stats[s.id].plannedHours = Math.round(hoursWorked[s.id]);
