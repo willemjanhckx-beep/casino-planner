@@ -1060,25 +1060,30 @@ const importJSON=(e)=>{
   }, [staff, schedule, settings, holidays, vacations, locks]);
 
   const loadFromSheets = useCallback(async () => {
-    const url = load(SK.gasUrl, "");
-    if (!url) return;
-    try {
-      const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
-      const results: Record<string, any> = {};
-      for (const tab of tabs) {
+  const url = load(SK.gasUrl, "");
+  if (!url) return;
+  try {
+    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+    const results: Record<string, any> = {};
+    for (const tab of tabs) {
+      try {
         const r = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
-        results[tab] = await r.json();
-      }
-      if (results.staff)     setStaff(results.staff);
-      if (results.schedule)  setSchedule(results.schedule);
-      if (results.settings)  setSettings(results.settings);
-      if (results.holidays)  setHolidays(results.holidays);
-      if (results.vacations) setVacations(results.vacations);
-      if (results.locks)     setLocks(results.locks);
-      isLoaded.current = true;
-      showToast("✅ Data geladen van Sheets!");
-    } catch { showToast("❌ Fout bij laden van Sheets."); }
-  }, []);
+        const text = await r.text();
+        if (text && text !== "{}") {
+          results[tab] = JSON.parse(text);
+        }
+      } catch { /* sla foute tab gewoon over */ }
+    }
+    if (results.staff && Array.isArray(results.staff)) setStaff(results.staff);
+    if (results.schedule && typeof results.schedule === "object") setSchedule(results.schedule);
+    if (results.settings && typeof results.settings === "object") setSettings(results.settings);
+    if (results.holidays && Array.isArray(results.holidays)) setHolidays(results.holidays);
+    if (results.vacations && Array.isArray(results.vacations)) setVacations(results.vacations);
+    if (results.locks && typeof results.locks === "object") setLocks(results.locks);
+    isLoaded.current = true;
+    showToast("✅ Data geladen van Sheets!");
+  } catch { showToast("❌ Fout bij laden van Sheets."); }
+}, []);
 
   useEffect(() => { loadFromSheets(); }, []);
 
