@@ -624,9 +624,11 @@ const handleSelect=useCallback((shiftId)=>{
         const ds=toDS(d);
         const shiftId=(schedule[s.id]||{})[ds]||"off";
         const shift=SHIFTS[shiftId?.toUpperCase()]||SHIFTS.OFF;
-        const isLocked=!!locks[lockKey(s.id,ds)];
-        const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate);
-        const locked=isLocked||isPastLock;
+        const rawLock=locks[lockKey(s.id,ds)];
+const isLocked=rawLock===true;
+const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate);
+const locked=isLocked||isPastLock;
+
         const isoWeek=getISOWeek(d);
         const unavail=!s.isFlexijob&&!isAvailOnDate(s,ds,isoWeek)&&!["off","vacation","sick"].includes(shiftId);
         return(
