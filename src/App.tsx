@@ -1088,19 +1088,6 @@ const importJSON=(e)=>{
     return () => clearTimeout(t);
   }, [staff, schedule, settings, holidays, vacations, locks]);
 
-  // Auto-sync naar Sheets (met debounce van 2 seconden)
-const syncTimeout = useRef<ReturnType<typeof setTimeout>|null>(null);
-useEffect(()=>{
-  if(!gasUrl) return;
-  if(syncTimeout.current) clearTimeout(syncTimeout.current);
-  syncTimeout.current = setTimeout(()=>{ saveToSheets(); }, 2000);
-},[staff,schedule,settings,holidays,vacations,locks]);
-
-// Automatisch laden bij opstarten
-useEffect(()=>{
-  if(gasUrl) loadFromSheets();
-},[]);
-
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
   const ws=weekDates[0],we=weekDates[6];
