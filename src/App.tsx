@@ -1254,10 +1254,24 @@ function StorageView({onExport,onImport,gasUrl,setGasUrl,onSaveToSheets,onLoadFr
           </div>
           {gasStatus&&<div style={{marginTop:6,fontSize:12,color:gasStatus.startsWith("✅")?"var(--green)":"var(--red)"}}>{gasStatus}</div>}
         </div>
-        <div style={{display:"flex",gap:8}}>
+                <div style={{display:"flex",gap:8}}>
           <button className="btn btn-primary" onClick={onSaveToSheets} style={{flex:1,justifyContent:"center"}}>⬆ Opslaan naar Sheets</button>
           <button className="btn" onClick={onLoadFromSheets} style={{flex:1,justifyContent:"center"}}>⬇ Laden van Sheets</button>
         </div>
+        <button className="btn" style={{marginTop:8,width:"100%",justifyContent:"center"}} onClick={async()=>{
+          const url=gasUrl; if(!url) return;
+          const tabs=["staff","schedule","settings","holidays","vacations","locks"];
+          const out={};
+          for(const tab of tabs){
+            try{
+              const r=await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
+              const text=await r.text();
+              out[tab]={length:text.length, first100:text.slice(0,100), parsed:text&&text!=="{}"?"ok":"leeg"};
+            }catch(e){ out[tab]={error:String(e)}; }
+          }
+          alert(JSON.stringify(out,null,2));
+        }}>🔍 Debug: wat staat er in Sheets?</button>
+
       </div>
     </div>
   );
