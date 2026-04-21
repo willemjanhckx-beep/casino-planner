@@ -250,6 +250,30 @@ function isCoverageSufficient(ds, currentSchedule, staff, demand) {
   return morning >= demand.morning && evening >= demand.evening;
 }
 
+// Tijdblokken binnen de werkdag 15:00–05:30
+const TIME_BLOCKS = [
+  { label: "15:00–19:00", start: 15, end: 19 },
+  { label: "19:00–23:00", start: 19, end: 23 },
+  { label: "23:00–02:30", start: 23, end: 26.5 },
+  { label: "02:30–05:30", start: 26.5, end: 29.5 },
+];
+
+function getBlockCoverage(ds, currentSchedule, staff) {
+  const coverage = TIME_BLOCKS.map(b => ({ ...b, count: 0 }));
+  staff.forEach(s => {
+    const shiftId = (currentSchedule[s.id] || {})[ds];
+    if (!shiftId || shiftId === "off" || shiftId === "vacation" || shiftId === "sick") return;
+    const shift = SHIFTS[shiftId.toUpperCase()];
+    if (!shift || shift.hours === 0) return;
+    const shiftStart = shift.startHour;
+    const shiftEnd   = shift.startHour + shift.hours;
+    coverage.forEach(b => {
+      if (shiftStart < b.end && shiftEnd > b.start) b.count++;
+    });
+  });
+  return coverage;
+}
+
 function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
   const regular = staff.filter(s => !s.isFlexijob && s.autoSchedule !== false);
   const flexi   = staff.filter(s =>  s.isFlexijob && s.autoSchedule !== false);
@@ -266,7 +290,8 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     stats[s.id]       = { weekendShifts: 0, nightShifts: 0, totalHours: 0, consecutiveNights: 0 };
   });
 
-  const lockDateObj = lockDate ? new Date(lockDate) : null;
+  const lockDateObj  = lockDate ? new Date(lockDate) : null;
+  const tolerance    = 0.02; // ±2%
 
   for (let d = new Date(year, 0, 1); d <= new Date(year, 11, 31); d.setDate(d.getDate() + 1)) {
     const ds     = toDS(d);
@@ -277,15 +302,14 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const isoWeek = getISOWeek(d);
     const demand  = getDayDemand(ds, settings, holidays, vacations);
 
-    // Beschikbaarheidsfilter
-    // workBlocks is een ZACHTE voorkeur: wie onder zijn uren zit mag ook op "off"-dagen werken
+    // Basisfilter
     const available = all.filter(s => {
-      if (locks[lockKey(s.id, ds)])                                    return false;
-      if (!isAvailOnDate(s, ds, isoWeek))                              return false;
-      if (stats[s.id].consecutiveNights >= settings.maxConsecNights)   return false;
-      if (hoursWorked[s.id] >= getTargetHours(s) * 1.10)              return false;
+      if (locks[lockKey(s.id, ds)])                                  return false;
+      if (!isAvailOnDate(s, ds, isoWeek))                            return false;
+      if (stats[s.id].consecutiveNights >= settings.maxConsecNights) return false;
+      // Tolerantie ±2% boven jaardoel
+      if (hoursWorked[s.id] >= getTargetHours(s) * (1 + tolerance))  return false;
 
-      // Rustcheck tov vorige dag
       const prevDate  = new Date(d);
       prevDate.setDate(prevDate.getDate() - 1);
       const prevDs    = toDS(prevDate);
@@ -293,13 +317,11 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       if (prevShift && !["off","vacation","sick"].includes(prevShift)) {
         if (!hasEnoughRest(prevDs, prevShift, ds, settings.minRestHours || 11)) return false;
       }
-
       return true;
     });
 
-    // Prioriteit: wie het verst onder jaardoel zit gaat voor
-    // Tiebreaker: workBlocks "work"-dag heeft voorkeur boven "off"-dag
-    const sorted = [...available].sort((a, b) => {
+    // Sorteer op uren-achterstand, workBlocks als tiebreaker
+    const sortByNeed = (arr) => [...arr].sort((a, b) => {
       const ratioA = hoursWorked[a.id] / Math.max(getTargetHours(a), 1);
       const ratioB = hoursWorked[b.id] / Math.max(getTargetHours(b), 1);
       if (Math.abs(ratioA - ratioB) > 0.01) return ratioA - ratioB;
@@ -311,17 +333,16 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const assigned = new Set();
     all.forEach(s => { if (locks[lockKey(s.id, ds)]) assigned.add(s.id); });
 
-    // 1. Avond/nacht bezetting
+    // ── 1. Avond/nacht pool ──────────────────────────────────────────────────
+    const eveningPool = sortByNeed(available.filter(s => !assigned.has(s.id)));
     let eveningAssigned = 0;
-    for (const s of sorted) {
+
+    for (const s of eveningPool) {
       if (eveningAssigned >= demand.evening) break;
-      if (assigned.has(s.id)) continue;
-
-      const hoursRatio = hoursWorked[s.id] / Math.max(getTargetHours(s), 1);
-      const shift      = getPersonalShift(s.id, dayIdx, hoursRatio);
-      if (shift.start < 18) continue;
-
+      const allEveningShifts = SHIFT_POOLS.filter(sh => sh.start >= 18);
+      const shift = allEveningShifts[(s.id * 3 + dayIdx) % allEveningShifts.length];
       const shiftId = deriveShiftId(shift.start);
+
       schedule[s.id][ds]      = shiftId;
       hoursWorked[s.id]      += shift.duration;
       stats[s.id].totalHours += shift.duration;
@@ -334,15 +355,14 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       eveningAssigned++;
     }
 
-    // 2. Dagbezetting
+    // ── 2. Dag pool ──────────────────────────────────────────────────────────
+    const morningPool = sortByNeed(available.filter(s => !assigned.has(s.id)));
     let morningAssigned = 0;
-    for (const s of sorted) {
-      if (morningAssigned >= demand.morning) break;
-      if (assigned.has(s.id)) continue;
 
-      const hoursRatio = hoursWorked[s.id] / Math.max(getTargetHours(s), 1);
-      const shift      = getPersonalShift(s.id, dayIdx, hoursRatio);
-      if (shift.start >= 18) continue;
+    for (const s of morningPool) {
+      if (morningAssigned >= demand.morning) break;
+      const allMorningShifts = SHIFT_POOLS.filter(sh => sh.start < 18);
+      const shift = allMorningShifts[(s.id * 2 + dayIdx) % allMorningShifts.length];
 
       schedule[s.id][ds]             = "morning";
       hoursWorked[s.id]             += shift.duration;
@@ -354,7 +374,38 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       morningAssigned++;
     }
 
-    // 3. Niet-ingeplanden krijgen vrij
+    // ── 3. Tijdblok-check: herverdeel indien een blok onderbezet is ──────────
+    const blockCoverage = getBlockCoverage(ds, schedule, all);
+    const minPerBlock   = Math.max(1, Math.floor(demand.evening / TIME_BLOCKS.length));
+
+    for (const block of blockCoverage) {
+      if (block.count >= minPerBlock) continue;
+      // Zoek iemand die beschikbaar is en nog niet ingepland, of van dag naar avond kan
+      const candidate = sortByNeed(
+        available.filter(s => {
+          if (assigned.has(s.id)) return false;
+          return true;
+        })
+      )[0];
+      if (!candidate) continue;
+
+      const shiftForBlock = SHIFT_POOLS.find(sh => sh.start >= block.start && sh.start < block.end)
+                         || SHIFT_POOLS.find(sh => sh.start >= 18);
+      if (!shiftForBlock) continue;
+
+      const shiftId = deriveShiftId(shiftForBlock.start);
+      schedule[candidate.id][ds]      = shiftId;
+      hoursWorked[candidate.id]      += shiftForBlock.duration;
+      stats[candidate.id].totalHours += shiftForBlock.duration;
+
+      if (shiftId === "night") { stats[candidate.id].consecutiveNights++; stats[candidate.id].nightShifts++; }
+      else                     { stats[candidate.id].consecutiveNights = 0; }
+
+      if (isWeekend(d)) stats[candidate.id].weekendShifts++;
+      assigned.add(candidate.id);
+    }
+
+    // ── 4. Niet-ingeplanden krijgen vrij ─────────────────────────────────────
     all.forEach(s => {
       if (assigned.has(s.id)) return;
       schedule[s.id][ds]            = "off";
@@ -362,14 +413,22 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     });
   }
 
+  // Stats afronden met expected/planned/difference
   all.forEach(s => {
-    stats[s.id].targetHours  = Math.round(getTargetHours(s));
-    stats[s.id].plannedHours = Math.round(hoursWorked[s.id]);
-    stats[s.id].hoursDiff    = Math.round(hoursWorked[s.id] - getTargetHours(s));
+    const target         = getTargetHours(s);
+    const planned        = hoursWorked[s.id];
+    const diff           = planned - target;
+    const withinTolerance = Math.abs(diff / Math.max(target, 1)) <= tolerance;
+
+    stats[s.id].targetHours       = Math.round(target);
+    stats[s.id].plannedHours      = Math.round(planned);
+    stats[s.id].hoursDiff         = Math.round(diff);
+    stats[s.id].withinTolerance   = withinTolerance;
   });
 
   return { schedule, stats };
 }
+
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
