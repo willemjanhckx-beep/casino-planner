@@ -1459,28 +1459,36 @@ const loadFromSheets = useCallback(async () => {
                       && Object.keys(results.schedule).length > 0;
 
       if (hasData) {
+        // Zet isLoaded VOOR de setState calls zodat de
+        // daaropvolgende auto-save de juiste data heeft
+        isLoaded.current = false; // blokkeer auto-save tijdelijk
+
         if (results.staff     && Array.isArray(results.staff))         setStaff(results.staff);
         if (results.schedule  && typeof results.schedule === "object") setSchedule(results.schedule);
         if (results.settings  && typeof results.settings === "object") setSettings(s => ({...s, ...results.settings}));
         if (results.holidays  && Array.isArray(results.holidays))      setHolidays(results.holidays);
         if (results.vacations && Array.isArray(results.vacations))     setVacations(results.vacations);
         if (results.locks     && typeof results.locks === "object")    setLocks(results.locks);
-        isLoaded.current = true;
-        showToast("✅ Data geladen van Sheets!");
+
+        // Wacht tot React alle state-updates verwerkt heeft
+        // dan pas auto-save toestaan
+        setTimeout(() => {
+          isLoaded.current = true;
+          showToast("✅ Data geladen van Sheets!");
+        }, 3000);
+
       } else {
-        // Sheets leeg → markeer als geladen zodat auto-save kan starten
         isLoaded.current = true;
         showToast("📋 Sheets leeg, lokale data wordt geüpload...");
       }
+
     } catch {
       showToast("❌ Fout bij laden van Sheets.");
+      isLoaded.current = true;
     } finally {
       setIsAppReady(true);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-
-
 
 
     // Eenmalig laden bij opstart — nooit opnieuw
@@ -1489,11 +1497,13 @@ const loadFromSheets = useCallback(async () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save na wijziging — alleen als app klaar is EN data al geladen was
-  useEffect(() => {
+   useEffect(() => {
     if (!isLoaded.current) return;
-    const t = setTimeout(() => saveToSheets(), 2500);
+    // Langere delay zodat alle state-updates na loadFromSheets gestabiliseerd zijn
+    const t = setTimeout(() => saveToSheets(), 5000);
     return () => clearTimeout(t);
   }, [staff, schedule, settings, holidays, vacations, locks]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
 
   const weeksInYear=getWeeksInYear(year);
