@@ -1435,7 +1435,7 @@ const saveToSheets = useCallback(async () => {
 
 
 const loadFromSheets = useCallback(async () => {
-    const url = load(SK.gasUrl, "");  // lees rechtstreeks uit localStorage, niet uit closure
+    const url = load(SK.gasUrl, "");
     if (!url) {
       setIsAppReady(true);
       return;
@@ -1468,33 +1468,33 @@ const loadFromSheets = useCallback(async () => {
         isLoaded.current = true;
         showToast("✅ Data geladen van Sheets!");
       } else {
-        // Sheets leeg → push lokale data naar Sheets
+        // Sheets leeg → markeer als geladen zodat auto-save kan starten
         isLoaded.current = true;
         showToast("📋 Sheets leeg, lokale data wordt geüpload...");
-        // Kleine delay zodat React state stabiel is voor de save
-        setTimeout(() => saveToSheets(), 1000);
       }
     } catch {
       showToast("❌ Fout bij laden van Sheets.");
     } finally {
       setIsAppReady(true);
     }
-  }, [saveToSheets]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 
 
 
-   // Laad bij opstart — eenmalig, leest URL rechtstreeks uit localStorage
+
+    // Eenmalig laden bij opstart — nooit opnieuw
   useEffect(() => {
     loadFromSheets();
-  }, [loadFromSheets]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save na elke wijziging, maar alleen nadat laden klaar is
+  // Auto-save na wijziging — alleen als app klaar is EN data al geladen was
   useEffect(() => {
     if (!isLoaded.current) return;
     const t = setTimeout(() => saveToSheets(), 2500);
     return () => clearTimeout(t);
-  }, [staff, schedule, settings, holidays, vacations, locks, saveToSheets]);
+  }, [staff, schedule, settings, holidays, vacations, locks]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
