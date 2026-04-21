@@ -78,6 +78,29 @@ const SK = { staff:"co3_staff", schedule:"co3_schedule", settings:"co3_settings"
 function load(k,fb){ try{ const r=localStorage.getItem(k); return r?JSON.parse(r):fb; }catch{ return fb; } }
 function save(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 
+// ─── PREFETCH ────────────────────────────────────────────────────────────────
+// Start de Sheets fetch zo vroeg mogelijk, nog voor React mount
+const _prefetchPromise: Promise<Record<string, any>> | null = (() => {
+  try {
+    const url = localStorage.getItem("co3_gasurl");
+    if (!url) return null;
+    const parsedUrl = JSON.parse(url);
+    if (!parsedUrl) return null;
+    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+    const results: Record<string, any> = {};
+    return Promise.all(
+      tabs.map(tab =>
+        fetch(`${parsedUrl}?tab=${tab}&t=${Date.now()}`)
+          .then(r => r.text())
+          .then(text => { if (text && text !== "{}") results[tab] = JSON.parse(text); })
+          .catch(() => {})
+      )
+    ).then(() => results);
+  } catch {
+    return null;
+  }
+})();
+
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 function getISOWeek(date){
   const d=new Date(Date.UTC(date.getFullYear(),date.getMonth(),date.getDate()));
