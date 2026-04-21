@@ -1518,11 +1518,27 @@ const loadFromSheets = useCallback(async () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save — alleen als isLoaded true is
-  useEffect(() => {
+    useEffect(() => {
     if (!isLoaded.current) return;
-    const t = setTimeout(() => saveToSheets(), 3000);
+    const url = load(SK.gasUrl, "");
+    if (!url) return;
+    const currentData = { staff, schedule, settings, holidays, vacations, locks };
+    const t = setTimeout(async () => {
+      try {
+        await Promise.all(
+          Object.entries(currentData).map(([tab, data]) =>
+            fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tab, data })
+            })
+          )
+        );
+      } catch {}
+    }, 3000);
     return () => clearTimeout(t);
-  }, [staff, schedule, settings, holidays, vacations, locks]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [staff, schedule, settings, holidays, vacations, locks]);
+
 
 
 
