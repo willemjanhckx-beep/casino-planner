@@ -69,6 +69,21 @@ const INITIAL_STAFF = [
   {id:14,name:"Flex 2",           fte:0,   color:"#9ca3af", vacationDays:0,  availableDays:[0,1,2,3,4,5,6], partTimeMode:"spread", isFlexijob:true,  autoSchedule:false},
 ];
 
+  const LOADING_MESSAGES = [
+    "Neem ondertussen gerust een pintje uit de koelkast 🍺",
+    "De planner warmt zijn hersenen op...",
+    "Even geduld, het casino ontwaakt... 🎰",
+    "De shifts worden geshuffeld... 🃏",
+    "Rami's planning machine staat op poten...",
+    "Croupiers worden ingepland, even geduld... 🎲",
+    "De kaarten worden geschud, zo klaar! 🂡",
+    "Blackjack of rooster? Wij kiezen rooster. 👑",
+  ];
+  const [loadingMsg] = useState(
+    () => LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)]
+  );
+
+
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 const SK = { staff:"co3_staff", schedule:"co3_schedule", settings:"co3_settings",
              holidays:"co3_holidays", vacations:"co3_vacations", year:"co3_year",
@@ -1474,18 +1489,32 @@ const importJSON=(e)=>{
     <>
       <style>{style}</style>
 
-      {!isAppReady && (
+            {!isAppReady && (
         <div style={{
           position:"fixed", inset:0, background:"var(--bg)",
           display:"flex", flexDirection:"column",
           alignItems:"center", justifyContent:"center",
           zIndex:999, gap:16
         }}>
-          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--gold)"}}>Casino Oostende</div>
-          <div style={{fontSize:13,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".15em"}}>Planner laden...</div>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:"var(--gold)",letterSpacing:".05em"}}>
+            Casino Oostende
+          </div>
+          <div style={{fontSize:11,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".2em",marginBottom:8}}>
+            Live Games Planner
+          </div>
           <div style={{width:48,height:48,border:"3px solid var(--border)",borderTop:"3px solid var(--gold)",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+          <div style={{
+            marginTop:16, fontSize:13, color:"var(--text-dim)",
+            fontStyle:"italic", maxWidth:320, textAlign:"center",
+            lineHeight:1.6, padding:"12px 20px",
+            background:"var(--surface2)", borderRadius:10,
+            border:"1px solid var(--border)"
+          }}>
+            {loadingMsg}
+          </div>
         </div>
       )}
+
 
       <div className="app" style={{opacity:isAppReady?1:0,pointerEvents:isAppReady?"auto":"none"}}>
         <div className="sidebar">
