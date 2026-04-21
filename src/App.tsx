@@ -69,19 +69,6 @@ const INITIAL_STAFF = [
   {id:14,name:"Flex 2",           fte:0,   color:"#9ca3af", vacationDays:0,  availableDays:[0,1,2,3,4,5,6], partTimeMode:"spread", isFlexijob:true,  autoSchedule:false},
 ];
 
-  const LOADING_MESSAGES = [
-    "Neem ondertussen gerust een pintje uit de koelkast 🍺",
-    "De planner warmt zijn hersenen op...",
-    "Even geduld, het casino ontwaakt... 🎰",
-    "De shifts worden geshuffeld... 🃏",
-    "Rami's planning machine staat op poten...",
-    "Croupiers worden ingepland, even geduld... 🎲",
-    "De kaarten worden geschud, zo klaar! 🂡",
-    "Blackjack of rooster? Wij kiezen rooster. 👑",
-  ];
-  const [loadingMsg] = useState(
-    () => LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)]
-  );
 
 
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
@@ -1316,6 +1303,20 @@ export default function App(){
   const actionCount = useRef(0);
   const isLoaded = useRef(false);
   const [isAppReady, setIsAppReady] = useState(false); // ← toevoegen
+
+  const LOADING_MESSAGES = [
+    "Neem ondertussen gerust een pintje uit de koelkast 🍺",
+    "De planner warmt zijn hersenen op...",
+    "Even geduld, het casino ontwaakt... 🎰",
+    "De shifts worden geshuffeld... 🃏",
+    "Rami's planning machine staat op poten...",
+    "Croupiers worden ingepland, even geduld... 🎲",
+    "De kaarten worden geschud, zo klaar! 🂡",
+    "Blackjack of rooster? Wij kiezen rooster. 👑",
+  ];
+  const [loadingMsg] = useState(
+    () => LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)]
+  );
 
 // Auto-save lokaal
 useEffect(()=>{ save(SK.staff,staff); },[staff]);
