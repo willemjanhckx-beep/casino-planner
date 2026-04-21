@@ -1457,31 +1457,39 @@ const importJSON=(e)=>{
   const loadFromSheets = useCallback(async () => {
     const url = load(SK.gasUrl, "");
     if (!url) {
-      setIsAppReady(true); // geen Sheets URL → gewoon doorgaan
+      setIsAppReady(true);
       return;
     }
     try {
-      const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
-      const results = {};
-      for (const tab of tabs) {
-        try {
-          const r = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
-          const text = await r.text();
-          if (text && text !== "{}") results[tab] = JSON.parse(text);
-        } catch {}
+      // Gebruik prefetch resultaat als dat beschikbaar is
+      const results: Record<string, any> = _prefetchPromise
+        ? await _prefetchPromise
+        : {};
+
+      // Als prefetch leeg is, alsnog zelf fetchen
+      if (Object.keys(results).length === 0) {
+        const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
+        for (const tab of tabs) {
+          try {
+            const r = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
+            const text = await r.text();
+            if (text && text !== "{}") results[tab] = JSON.parse(text);
+          } catch {}
+        }
       }
-      if (results.staff && Array.isArray(results.staff))           setStaff(results.staff);
-      if (results.schedule && typeof results.schedule === "object") setSchedule(results.schedule);
-      if (results.settings && typeof results.settings === "object") setSettings(results.settings);
-      if (results.holidays && Array.isArray(results.holidays))     setHolidays(results.holidays);
-      if (results.vacations && Array.isArray(results.vacations))   setVacations(results.vacations);
-      if (results.locks && typeof results.locks === "object")       setLocks(results.locks);
+
+      if (results.staff && Array.isArray(results.staff))            setStaff(results.staff);
+      if (results.schedule && typeof results.schedule === "object")  setSchedule(results.schedule);
+      if (results.settings && typeof results.settings === "object")  setSettings(results.settings);
+      if (results.holidays && Array.isArray(results.holidays))      setHolidays(results.holidays);
+      if (results.vacations && Array.isArray(results.vacations))    setVacations(results.vacations);
+      if (results.locks && typeof results.locks === "object")        setLocks(results.locks);
       isLoaded.current = true;
       showToast("✅ Data geladen van Sheets!");
     } catch {
       showToast("❌ Fout bij laden van Sheets.");
     } finally {
-      setIsAppReady(true); // altijd klaar zetten, ook bij fout
+      setIsAppReady(true);
     }
   }, []);
 
