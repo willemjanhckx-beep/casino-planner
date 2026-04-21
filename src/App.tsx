@@ -1432,21 +1432,21 @@ const importJSON=(e)=>{
   };
 
 const saveToSheets = useCallback(async () => {
-    const url = gasUrl;
+    const url = load(SK.gasUrl, "");
     if (!url) return;
     try {
       const tabs = { staff, schedule, settings, holidays, vacations, locks };
-      const saves = Object.entries(tabs).map(([tab, data]) =>
-        fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tab, data })
-        })
+      await Promise.all(
+        Object.entries(tabs).map(([tab, data]) =>
+          fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tab, data })
+          })
+        )
       );
-      await Promise.all(saves);
     } catch {}
-  }, [staff, schedule, settings, holidays, vacations, locks, gasUrl]);
-
+  }, [staff, schedule, settings, holidays, vacations, locks]);
 
 const loadFromSheets = useCallback(async () => {
     const url = load(SK.gasUrl, "");
@@ -1468,19 +1468,17 @@ const loadFromSheets = useCallback(async () => {
         } catch {}
       }));
 
-      const hasData = results.schedule
-                      && typeof results.schedule === "object"
-                      && Object.keys(results.schedule).length > 0;
+      const hasData = results.staff
+                      && Array.isArray(results.staff)
+                      && results.staff.length > 0;
 
       if (hasData) {
+        // Blokkeer auto-save volledig tijdens het laden
         isLoaded.current = false;
 
-        // Staff: zorg dat id altijd een nummer is
         if (results.staff && Array.isArray(results.staff)) {
           setStaff(results.staff.map(s => ({...s, id: Number(s.id)})));
         }
-
-        // Schedule: converteer string-sleutels naar nummers
         if (results.schedule && typeof results.schedule === "object") {
           const fixedSchedule = {};
           Object.entries(results.schedule).forEach(([sid, days]) => {
@@ -1488,22 +1486,20 @@ const loadFromSheets = useCallback(async () => {
           });
           setSchedule(fixedSchedule);
         }
-
         if (results.settings  && typeof results.settings  === "object") setSettings(s => ({...s, ...results.settings}));
         if (results.holidays  && Array.isArray(results.holidays))        setHolidays(results.holidays);
         if (results.vacations && Array.isArray(results.vacations))       setVacations(results.vacations);
+        if (results.locks     && typeof results.locks     === "object")  setLocks(results.locks);
 
-        // Locks: converteer "1::2026-01-01" keys — deze zijn al strings, geen conversie nodig
-        if (results.locks && typeof results.locks === "object") {
-          setLocks(results.locks);
-        }
-
+        // Wacht 6 seconden zodat React alle state updates verwerkt
+        // en de auto-save useEffect met de JUISTE data vuurt
         setTimeout(() => {
           isLoaded.current = true;
-          showToast("✅ Data geladen van Sheets!");
-        }, 3000);
+        }, 6000);
 
+        showToast("✅ Data geladen van Sheets!");
       } else {
+        // Sheets leeg → lokale data gebruiken en uploaden
         isLoaded.current = true;
         showToast("📋 Sheets leeg, lokale data wordt geüpload...");
       }
@@ -1516,20 +1512,18 @@ const loadFromSheets = useCallback(async () => {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-
-
-    // Eenmalig laden bij opstart — nooit opnieuw
+  // Eenmalig laden bij opstart
   useEffect(() => {
     loadFromSheets();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save na wijziging — alleen als app klaar is EN data al geladen was
-   useEffect(() => {
+  // Auto-save — alleen als isLoaded true is
+  useEffect(() => {
     if (!isLoaded.current) return;
-    // Langere delay zodat alle state-updates na loadFromSheets gestabiliseerd zijn
-    const t = setTimeout(() => saveToSheets(), 5000);
+    const t = setTimeout(() => saveToSheets(), 3000);
     return () => clearTimeout(t);
   }, [staff, schedule, settings, holidays, vacations, locks]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
 
 
