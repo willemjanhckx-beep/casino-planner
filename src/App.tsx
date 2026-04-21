@@ -78,28 +78,6 @@ const SK = { staff:"co3_staff", schedule:"co3_schedule", settings:"co3_settings"
 function load(k,fb){ try{ const r=localStorage.getItem(k); return r?JSON.parse(r):fb; }catch{ return fb; } }
 function save(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 
-// ─── PREFETCH ────────────────────────────────────────────────────────────────
-// Start de Sheets fetch zo vroeg mogelijk, nog voor React mount
-const _prefetchPromise: Promise<Record<string, any>> | null = (() => {
-  try {
-    const url = localStorage.getItem("co3_gasurl");
-    if (!url) return null;
-    const parsedUrl = JSON.parse(url);
-    if (!parsedUrl) return null;
-    const tabs = ["staff", "schedule", "settings", "holidays", "vacations", "locks"];
-    const results: Record<string, any> = {};
-    return Promise.all(
-      tabs.map(tab =>
-        fetch(`${parsedUrl}?tab=${tab}&t=${Date.now()}`)
-          .then(r => r.text())
-          .then(text => { if (text && text !== "{}") results[tab] = JSON.parse(text); })
-          .catch(() => {})
-      )
-    ).then(() => results);
-  } catch {
-    return null;
-  }
-})();
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 function getISOWeek(date){
@@ -1457,7 +1435,7 @@ const saveToSheets = useCallback(async () => {
 
 
 const loadFromSheets = useCallback(async () => {
-    const url = gasUrl;
+    const url = load(SK.gasUrl, "");  // lees rechtstreeks uit localStorage, niet uit closure
     if (!url) {
       setIsAppReady(true);
       return;
@@ -1476,50 +1454,47 @@ const loadFromSheets = useCallback(async () => {
         } catch {}
       }));
 
-      // Controleer of Sheets effectief bruikbare data heeft
-      const hasData = results.schedule && typeof results.schedule === "object"
+      const hasData = results.schedule
+                      && typeof results.schedule === "object"
                       && Object.keys(results.schedule).length > 0;
 
       if (hasData) {
-        // Sheets heeft data → gebruik Sheets als bron van waarheid
-        if (results.staff     && Array.isArray(results.staff))          setStaff(results.staff);
-        if (results.schedule  && typeof results.schedule === "object")  setSchedule(results.schedule);
-        if (results.settings  && typeof results.settings === "object")  setSettings(s => ({...s, ...results.settings}));
-        if (results.holidays  && Array.isArray(results.holidays))       setHolidays(results.holidays);
-        if (results.vacations && Array.isArray(results.vacations))      setVacations(results.vacations);
-        if (results.locks     && typeof results.locks === "object")     setLocks(results.locks);
+        if (results.staff     && Array.isArray(results.staff))         setStaff(results.staff);
+        if (results.schedule  && typeof results.schedule === "object") setSchedule(results.schedule);
+        if (results.settings  && typeof results.settings === "object") setSettings(s => ({...s, ...results.settings}));
+        if (results.holidays  && Array.isArray(results.holidays))      setHolidays(results.holidays);
+        if (results.vacations && Array.isArray(results.vacations))     setVacations(results.vacations);
+        if (results.locks     && typeof results.locks === "object")    setLocks(results.locks);
         isLoaded.current = true;
         showToast("✅ Data geladen van Sheets!");
       } else {
-        // Sheets is leeg → bewaar lokale data en push die naar Sheets
+        // Sheets leeg → push lokale data naar Sheets
         isLoaded.current = true;
-        showToast("📋 Lokale data behouden, Sheets wordt bijgewerkt...");
+        showToast("📋 Sheets leeg, lokale data wordt geüpload...");
+        // Kleine delay zodat React state stabiel is voor de save
+        setTimeout(() => saveToSheets(), 1000);
       }
     } catch {
       showToast("❌ Fout bij laden van Sheets.");
     } finally {
       setIsAppReady(true);
     }
-  }, [gasUrl]);
+  }, [saveToSheets]);
 
 
 
-  // Laad Sheets data bij opstart — altijd, op elk apparaat
+
+   // Laad bij opstart — eenmalig, leest URL rechtstreeks uit localStorage
   useEffect(() => {
     loadFromSheets();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadFromSheets]);
 
-  // Auto-save naar Sheets na elke wijziging
-  // Wacht tot loadFromSheets klaar is (isAppReady) voor we beginnen saven
+  // Auto-save na elke wijziging, maar alleen nadat laden klaar is
   useEffect(() => {
-    if (!isAppReady) return;
-    const t = setTimeout(() => {
-      saveToSheets();
-    }, 2500);
+    if (!isLoaded.current) return;
+    const t = setTimeout(() => saveToSheets(), 2500);
     return () => clearTimeout(t);
-  }, [staff, schedule, settings, holidays, vacations, locks]); // eslint-disable-line react-hooks/exhaustive-deps
-
-
+  }, [staff, schedule, settings, holidays, vacations, locks, saveToSheets]);
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
