@@ -1473,19 +1473,31 @@ const loadFromSheets = useCallback(async () => {
                       && Object.keys(results.schedule).length > 0;
 
       if (hasData) {
-        // Zet isLoaded VOOR de setState calls zodat de
-        // daaropvolgende auto-save de juiste data heeft
-        isLoaded.current = false; // blokkeer auto-save tijdelijk
+        isLoaded.current = false;
 
-        if (results.staff     && Array.isArray(results.staff))         setStaff(results.staff);
-        if (results.schedule  && typeof results.schedule === "object") setSchedule(results.schedule);
-        if (results.settings  && typeof results.settings === "object") setSettings(s => ({...s, ...results.settings}));
-        if (results.holidays  && Array.isArray(results.holidays))      setHolidays(results.holidays);
-        if (results.vacations && Array.isArray(results.vacations))     setVacations(results.vacations);
-        if (results.locks     && typeof results.locks === "object")    setLocks(results.locks);
+        // Staff: zorg dat id altijd een nummer is
+        if (results.staff && Array.isArray(results.staff)) {
+          setStaff(results.staff.map(s => ({...s, id: Number(s.id)})));
+        }
 
-        // Wacht tot React alle state-updates verwerkt heeft
-        // dan pas auto-save toestaan
+        // Schedule: converteer string-sleutels naar nummers
+        if (results.schedule && typeof results.schedule === "object") {
+          const fixedSchedule = {};
+          Object.entries(results.schedule).forEach(([sid, days]) => {
+            fixedSchedule[Number(sid)] = days;
+          });
+          setSchedule(fixedSchedule);
+        }
+
+        if (results.settings  && typeof results.settings  === "object") setSettings(s => ({...s, ...results.settings}));
+        if (results.holidays  && Array.isArray(results.holidays))        setHolidays(results.holidays);
+        if (results.vacations && Array.isArray(results.vacations))       setVacations(results.vacations);
+
+        // Locks: converteer "1::2026-01-01" keys — deze zijn al strings, geen conversie nodig
+        if (results.locks && typeof results.locks === "object") {
+          setLocks(results.locks);
+        }
+
         setTimeout(() => {
           isLoaded.current = true;
           showToast("✅ Data geladen van Sheets!");
@@ -1503,6 +1515,7 @@ const loadFromSheets = useCallback(async () => {
       setIsAppReady(true);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
 
     // Eenmalig laden bij opstart — nooit opnieuw
