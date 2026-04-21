@@ -821,55 +821,121 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
 }
 
 // ─── STAFF STATS ──────────────────────────────────────────────────────────────
-function StaffStats({staff,schedule,year,holidays}){
-  const regular=staff.filter(s=>!s.isFlexijob);
-  const computed=regular.map(s=>{
-    let totalHours=0,weekendShifts=0,nightShifts=0,holidayShifts=0,vacUsed=0;
-    const entries=schedule[s.id]||{};
-    Object.entries(entries).forEach(([ds,shiftId])=>{
-      if(!ds.startsWith(String(year))) return;
-      const shift=SHIFTS[shiftId?.toUpperCase()]; if(!shift) return;
-      if(shiftId==="vacation"){ vacUsed++; return; }
-      if(shift.hours===0) return;
-      totalHours+=shift.hours;
-      const date=new Date(ds);
-      if(isWeekend(date)) weekendShifts++;
-      if(shiftId==="evening"||shiftId==="night") nightShifts++;
-      if(isHoliday(ds,holidays)) holidayShifts++;
+function StaffStats({staff, schedule, year, holidays}) {
+  const regular  = staff.filter(s => !s.isFlexijob);
+  const computed = regular.map(s => {
+    let totalHours = 0, weekendShifts = 0, nightShifts = 0, holidayShifts = 0, vacUsed = 0;
+    const entries = schedule[s.id] || {};
+
+    Object.entries(entries).forEach(([ds, shiftId]) => {
+      if (!ds.startsWith(String(year))) return;
+      const shift = SHIFTS[shiftId?.toUpperCase()];
+      if (!shift) return;
+      if (shiftId === "vacation") { vacUsed++; return; }
+      if (shift.hours === 0) return;
+      totalHours += shift.hours;
+      const date = new Date(ds);
+      if (isWeekend(date))                            weekendShifts++;
+      if (shiftId === "evening" || shiftId === "night") nightShifts++;
+      if (isHoliday(ds, holidays))                    holidayShifts++;
     });
-    const targetHours=s.fte*38*52;
-    const vacRemaining=s.vacationDays-vacUsed;
-    const fatigueScore=Math.min(100,(nightShifts/120)*100);
-    return{...s,totalHours,weekendShifts,nightShifts,holidayShifts,targetHours,fatigueScore,vacUsed,vacRemaining};
+
+    const targetHours     = s.fte * 38 * 52;
+    const hoursDiff       = totalHours - targetHours;
+    const diffPct         = targetHours > 0 ? hoursDiff / targetHours : 0;
+    const withinTolerance = Math.abs(diffPct) <= 0.02;
+    const vacRemaining    = s.vacationDays - vacUsed;
+    const fatigueScore    = Math.min(100, (nightShifts / 120) * 100);
+
+    return { ...s, totalHours, weekendShifts, nightShifts, holidayShifts,
+             targetHours, hoursDiff, diffPct, withinTolerance,
+             fatigueScore, vacUsed, vacRemaining };
   });
-  return(
+
+  return (
     <div className="stats-grid">
-      {computed.map(s=>{
-        const fc=s.fatigueScore>66?"#ef4444":s.fatigueScore>33?"#f59e0b":"#22c55e";
-        const hr=s.totalHours/Math.max(s.targetHours,1);
-        const hc=Math.abs(hr-1)<0.05?"#22c55e":Math.abs(hr-1)<0.15?"#f59e0b":"#ef4444";
-        const vr=s.vacUsed/Math.max(s.vacationDays,1);
-        const vc=vr>1?"over":vr>0.8?"warn":"";
-        return(
+      {computed.map(s => {
+        const fc = s.fatigueScore > 66 ? "#ef4444" : s.fatigueScore > 33 ? "#f59e0b" : "#22c55e";
+        const hc = s.withinTolerance ? "#22c55e" : Math.abs(s.diffPct) < 0.10 ? "#f59e0b" : "#ef4444";
+        const vr = s.vacUsed / Math.max(s.vacationDays, 1);
+        const vc = vr > 1 ? "over" : vr > 0.8 ? "warn" : "";
+        const diffLabel = s.hoursDiff > 0 ? `+${Math.round(s.hoursDiff)}u` : `${Math.round(s.hoursDiff)}u`;
+
+        return (
           <div key={s.id} className="stat-card">
             <div className="stat-card-header">
               <div style={{width:10,height:10,borderRadius:3,background:s.color,flexShrink:0}}/>
-              <div><div className="stat-name">{s.name}</div><div className="stat-fte">{CONTRACT_TYPES.find(c=>c.value===s.fte)?.label||`${Math.round(s.fte*100)}%`}</div></div>
+              <div>
+                <div className="stat-name">{s.name}</div>
+                <div className="stat-fte">
+                  {CONTRACT_TYPES.find(c => c.value === s.fte)?.label || `${Math.round(s.fte*100)}%`}
+                </div>
+              </div>
             </div>
-            <div className="stat-row"><span>Uren gewerkt</span><span className="stat-val" style={{color:hc}}>{Math.round(s.totalHours)}u / {Math.round(s.targetHours)}u</span></div>
+
+            {/* Uren blok */}
+            <div style={{background:"var(--surface3)",borderRadius:7,padding:"10px 12px",marginBottom:8}}>
+              <div className="stat-row">
+                <span>Verwacht (jaar)</span>
+                <span className="stat-val">{Math.round(s.targetHours)}u</span>
+              </div>
+              <div className="stat-row">
+                <span>Gepland</span>
+                <span className="stat-val" style={{color:hc}}>{Math.round(s.totalHours)}u</span>
+              </div>
+              <div className="stat-row">
+                <span>Verschil</span>
+                <span className="stat-val" style={{color:hc}}>
+                  {diffLabel}
+                  {s.withinTolerance
+                    ? <span style={{fontSize:10,marginLeft:4,color:"#22c55e"}}>✓ binnen ±2%</span>
+                    : <span style={{fontSize:10,marginLeft:4,color:"#ef4444"}}>✗ buiten ±2%</span>
+                  }
+                </span>
+              </div>
+              {/* Voortgangsbalk */}
+              <div style={{height:6,borderRadius:3,background:"var(--border)",overflow:"hidden",marginTop:8}}>
+                <div style={{
+                  height:"100%", borderRadius:3, background:hc,
+                  width:`${Math.min(100, (s.totalHours / Math.max(s.targetHours,1)) * 100)}%`,
+                  transition:"width .4s"
+                }}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"var(--text-dim)",marginTop:3}}>
+                <span>0u</span>
+                <span style={{color:"var(--gold)"}}>doel: {Math.round(s.targetHours)}u</span>
+                <span>{Math.round(s.targetHours * 1.02)}u</span>
+              </div>
+            </div>
+
             <div className="stat-row"><span>Weekend shifts</span><span className="stat-val">{s.weekendShifts}</span></div>
             <div className="stat-row"><span>Nachtdiensten</span><span className="stat-val">{s.nightShifts}</span></div>
             <div className="stat-row"><span>Feestdagen</span><span className="stat-val">{s.holidayShifts}</span></div>
-            <div className="stat-row"><span>Vakantie</span><span className="stat-val" style={{color:vr>1?"#ef4444":vr>0.8?"#f59e0b":"#22c55e"}}>{s.vacUsed}/{s.vacationDays}</span></div>
-            <div className="vac-bar"><div className={`vac-fill ${vc}`} style={{width:`${Math.min(100,vr*100)}%`}}/></div>
-            <div className="stat-row" style={{marginTop:8}}><span>Vermoeidheid</span><span className="stat-val" style={{color:fc}}>{s.fatigueScore>66?"🔴 Hoog":s.fatigueScore>33?"🟡 Medium":"🟢 Laag"}</span></div>
-            <div className="fatigue-bar"><div className="fatigue-fill" style={{width:`${s.fatigueScore}%`,background:fc}}/></div>
+            <div className="stat-row">
+              <span>Vakantie</span>
+              <span className="stat-val" style={{color: vr>1?"#ef4444":vr>0.8?"#f59e0b":"#22c55e"}}>
+                {s.vacUsed}/{s.vacationDays}
+              </span>
+            </div>
+            <div className="vac-bar">
+              <div className={`vac-fill ${vc}`} style={{width:`${Math.min(100,vr*100)}%`}}/>
+            </div>
+            <div className="stat-row" style={{marginTop:8}}>
+              <span>Vermoeidheid</span>
+              <span className="stat-val" style={{color:fc}}>
+                {s.fatigueScore>66?"🔴 Hoog":s.fatigueScore>33?"🟡 Medium":"🟢 Laag"}
+              </span>
+            </div>
+            <div className="fatigue-bar">
+              <div className="fatigue-fill" style={{width:`${s.fatigueScore}%`,background:fc}}/>
+            </div>
           </div>
         );
       })}
     </div>
   );
 }
+
 
 // ─── STAFF MANAGER ────────────────────────────────────────────────────────────
 function StaffManager({staff,setStaff,schedule,year}){
