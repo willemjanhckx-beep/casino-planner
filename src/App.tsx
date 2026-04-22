@@ -304,7 +304,7 @@ function getBlockCoverage(ds, currentSchedule, staff) {
   staff.forEach(s => {
     const shiftId = (currentSchedule[s.id] || {})[ds];
     if (!shiftId || shiftId === "off" || shiftId === "vacation" || shiftId === "sick") return;
-    const shift = SHIFTS[shiftId.toUpperCase()];
+    const shift = getShiftDisplay(shiftId);
     if (!shift || shift.hours === 0) return;
     const shiftStart = shift.startHour;
     const shiftEnd   = shift.startHour + shift.hours;
@@ -483,6 +483,8 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       schedule[s.id][ds]            = "off";
       stats[s.id].consecutiveNights = 0;
     });
+  } // ← sluit de for-loop
+
   // Stats afronden met expected/planned/difference
   all.forEach(s => {
     const target         = getTargetHours(s);
@@ -932,9 +934,8 @@ function StaffStats({staff, schedule, year, holidays}) {
 
     Object.entries(entries).forEach(([ds, shiftId]) => {
       if (!ds.startsWith(String(year))) return;
-      const shift = SHIFTS[shiftId?.toUpperCase()];
-      if (!shift) return;
       if (shiftId === "vacation") { vacUsed++; return; }
+      if (!shiftId || shiftId === "off" || shiftId === "sick") return;
       const disp = getShiftDisplay(shiftId);
       if (!disp || disp.hours === 0) return;
       totalHours += disp.hours;
@@ -1408,7 +1409,7 @@ const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setT
     for(let m=0;m<12;m++){ const dim=new Date(year,m+1,0).getDate(); for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d))); }
     const header=["Naam","Type","FTE",...dates].join(";");
     const rows=staff.map(s=>{
-      const vals=dates.map(ds=>{ const sid=(schedule[s.id]||{})[ds]||"off"; return SHIFTS[sid?.toUpperCase()]?.label||"Vrij"; });
+      const vals=dates.map(ds=>{ const sid=(schedule[s.id]||{})[ds]||"off"; return getShiftDisplay(sid).label||"Vrij"; });
       return[s.name,s.isFlexijob?"Flexijob":"Vast",s.fte,...vals].join(";");
     });
     const blob=new Blob(["\uFEFF"+[header,...rows].join("\n")],{type:"text/csv;charset=utf-8;"});
