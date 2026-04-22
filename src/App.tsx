@@ -1196,69 +1196,25 @@ return(
 }
 
 // ─── STORAGE VIEW ─────────────────────────────────────────────────────────────
-function StorageView({onExport,onImport,gasUrl,setGasUrl,onSaveToSheets,onLoadFromSheets}){
-  const [showGasInfo,setShowGasInfo]=useState(false);
-  const [gasStatus,setGasStatus]=useState(null);
-
-  const testConnection=async()=>{
-    if(!gasUrl){ setGasStatus("❌ Geen URL ingevuld."); return; }
-    try{
-      const r=await fetch(gasUrl+"?action=ping");
-      setGasStatus(r.ok?"✅ Verbonden!":"⚠️ Kon geen verbinding maken.");
-    }catch{ setGasStatus("❌ Fout. Controleer de URL en CORS instellingen."); }
-  };
-
-  return(
+function StorageView({onExport, onImport, onSaveToSheets, onLoadFromSheets}) {
+  return (
     <div>
-      {showGasInfo&&<GasInfoModal onClose={()=>setShowGasInfo(false)}/>}
-      <div style={{display:"flex",gap:10,marginBottom:20}}>
-        <button className="btn btn-primary" onClick={onExport}>⬇ Export JSON backup</button>
-        <label className="btn" style={{cursor:"pointer"}}>⬆ Import JSON<input type="file" accept=".json" style={{display:"none"}} onChange={onImport}/></label>
-      </div>
-      <div className="storage-options">
-        <div className="storage-card">
-          <h3>✅ Optie 1 — Local Storage</h3>
-          <p>Data opgeslagen in de browser. Werkt offline.</p>
-          <div className="pro">✔ Geen setup</div><div className="pro">✔ Instant</div>
-          <div className="con">✗ Alleen op dit apparaat</div>
-          <div style={{marginTop:8,padding:10,background:"var(--surface2)",borderRadius:6,fontSize:11,color:"var(--green)"}}>✅ Momenteel actief — auto-save aan</div>
-        </div>
-        <div className="storage-card">
-          <h3>📊 Optie 2 — Google Sheets</h3>
-          <p>Data opgeslagen in Google Sheets via Apps Script. Multi-device.</p>
-          <div className="pro">✔ Overal toegankelijk</div><div className="pro">✔ Gratis</div>
-          <div className="con">✗ Setup vereist</div>
-          <button className="btn" style={{marginTop:8,width:"100%",justifyContent:"center"}} onClick={()=>setShowGasInfo(true)}>ℹ️ Stap voor stap uitleg</button>
-        </div>
-      </div>
-      <div className="settings-section" style={{marginTop:0}}>
-        <div className="settings-title">🔗 Google Sheets Verbinding</div>
-        <div className="form-row"><label className="form-label">Web App URL (van Google Apps Script)</label>
-          <div style={{display:"flex",gap:8}}>
-            <input className="form-input" value={gasUrl||""} onChange={e=>setGasUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" style={{flex:1}}/>
-            <button className="btn" onClick={testConnection}>Test</button>
-          </div>
-          {gasStatus&&<div style={{marginTop:6,fontSize:12,color:gasStatus.startsWith("✅")?"var(--green)":"var(--red)"}}>{gasStatus}</div>}
-        </div>
-                       <div style={{display:"flex",gap:8}}>
+      <div style={{marginBottom:20,padding:16,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10}}>
+        <div style={{fontSize:13,color:"var(--gold)",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>☁️ Supabase Sync</div>
+        <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:12}}>Data wordt automatisch gesynchroniseerd tussen alle apparaten via Supabase.</div>
+        <div style={{display:"flex",gap:8}}>
           <button className="btn btn-primary" onClick={onSaveToSheets} style={{flex:1,justifyContent:"center"}}>⬆ Opslaan naar Supabase</button>
           <button className="btn" onClick={onLoadFromSheets} style={{flex:1,justifyContent:"center"}}>⬇ Laden van Supabase</button>
         </div>
+      </div>
 
-        <button className="btn" style={{marginTop:8,width:"100%",justifyContent:"center"}} onClick={async()=>{
-          const url=gasUrl; if(!url) return;
-          const tabs=["staff","schedule","settings","holidays","vacations","locks"];
-          const out={};
-          for(const tab of tabs){
-            try{
-              const r=await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
-              const text=await r.text();
-              out[tab]={length:text.length, first100:text.slice(0,100), parsed:text&&text!=="{}"?"ok":"leeg"};
-            }catch(e){ out[tab]={error:String(e)}; }
-          }
-          alert(JSON.stringify(out,null,2));
-        }}>🔍 Debug: wat staat er in Sheets?</button>
-
+      <div style={{marginBottom:20,padding:16,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10}}>
+        <div style={{fontSize:13,color:"var(--gold)",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>💾 Lokale Backup</div>
+        <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:12}}>Export of importeer een volledige backup als JSON bestand.</div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-primary" onClick={onExport}>⬇ Export JSON backup</button>
+          <label className="btn" style={{cursor:"pointer"}}>⬆ Import JSON<input type="file" accept=".json" style={{display:"none"}} onChange={onImport}/></label>
+        </div>
       </div>
     </div>
   );
