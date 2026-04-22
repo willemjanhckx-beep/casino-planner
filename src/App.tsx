@@ -1,5 +1,39 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 
+const SUPABASE_URL = "https://edlcobufsarpzakzscpl.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGNvYnVmc2FycHpha3pzY3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODI0NDAsImV4cCI6MjA5MjQ1ODQ0MH0.pZcav2FMpqYh2io57F1HGVAuhullZC89KB34qNUxBoQ";
+
+async function sbGet(key) {
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/planner_data?key=eq.${key}&select=value`,
+    { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } }
+  );
+  const data = await r.json();
+  if (!data || data.length === 0) return null;
+  return JSON.parse(data[0].value);
+}
+
+async function sbSet(key, value) {
+  await fetch(
+    `${SUPABASE_URL}/rest/v1/planner_data`,
+    {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+      },
+      body: JSON.stringify({
+        key,
+        value: JSON.stringify(value),
+        updated_at: new Date().toISOString()
+      })
+    }
+  );
+}
+
+
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const SHIFTS = {
   MORNING:  { id:"morning",  label:"Dag",     time:"15:00–21:00", startHour:15, endHour:21,  hours:6,   color:"#f59e0b", bg:"#78350f" },
@@ -1254,10 +1288,11 @@ function StorageView({onExport,onImport,gasUrl,setGasUrl,onSaveToSheets,onLoadFr
           </div>
           {gasStatus&&<div style={{marginTop:6,fontSize:12,color:gasStatus.startsWith("✅")?"var(--green)":"var(--red)"}}>{gasStatus}</div>}
         </div>
-                <div style={{display:"flex",gap:8}}>
-          <button className="btn btn-primary" onClick={onSaveToSheets} style={{flex:1,justifyContent:"center"}}>⬆ Opslaan naar Sheets</button>
-          <button className="btn" onClick={onLoadFromSheets} style={{flex:1,justifyContent:"center"}}>⬇ Laden van Sheets</button>
+                       <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-primary" onClick={onSaveToSheets} style={{flex:1,justifyContent:"center"}}>⬆ Opslaan naar Supabase</button>
+          <button className="btn" onClick={onLoadFromSheets} style={{flex:1,justifyContent:"center"}}>⬇ Laden van Supabase</button>
         </div>
+
         <button className="btn" style={{marginTop:8,width:"100%",justifyContent:"center"}} onClick={async()=>{
           const url=gasUrl; if(!url) return;
           const tabs=["staff","schedule","settings","holidays","vacations","locks"];
@@ -1432,85 +1467,74 @@ const importJSON=(e)=>{
   };
 
 const saveToSheets = useCallback(async () => {
-    const url = load(SK.gasUrl, "");
-    if (!url) return;
     try {
-      const tabs = { staff, schedule, settings, holidays, vacations, locks };
-      await Promise.all(
-        Object.entries(tabs).map(([tab, data]) =>
-          fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tab, data })
-          })
-        )
-      );
+      await Promise.all([
+        sbSet("staff",     staff),
+        sbSet("schedule",  schedule),
+        sbSet("settings",  settings),
+        sbSet("holidays",  holidays),
+        sbSet("vacations", vacations),
+        sbSet("locks",     locks),
+      ]);
     } catch {}
   }, [staff, schedule, settings, holidays, vacations, locks]);
 
 const loadFromSheets = useCallback(async () => {
-    const url = load(SK.gasUrl, "");
-    if (!url) {
-      setIsAppReady(true);
-      return;
-    }
     try {
-      const tabs    = ["staff","schedule","settings","holidays","vacations","locks"];
-      const results = {};
+      const [
+        staffData,
+        scheduleData,
+        settingsData,
+        holidaysData,
+        vacationsData,
+        locksData,
+      ] = await Promise.all([
+        sbGet("staff"),
+        sbGet("schedule"),
+        sbGet("settings"),
+        sbGet("holidays"),
+        sbGet("vacations"),
+        sbGet("locks"),
+      ]);
 
-      await Promise.all(tabs.map(async (tab) => {
-        try {
-          const r    = await fetch(`${url}?tab=${tab}&t=${Date.now()}`);
-          const text = await r.text();
-          if (text && text !== "{}" && text.trim() !== "") {
-            results[tab] = JSON.parse(text);
-          }
-        } catch {}
-      }));
-
-      const hasData = results.staff
-                      && Array.isArray(results.staff)
-                      && results.staff.length > 0;
+      const hasData = staffData && Array.isArray(staffData) && staffData.length > 0;
 
       if (hasData) {
-        // Blokkeer auto-save volledig tijdens het laden
         isLoaded.current = false;
 
-        if (results.staff && Array.isArray(results.staff)) {
-          setStaff(results.staff.map(s => ({...s, id: Number(s.id)})));
-        }
-        if (results.schedule && typeof results.schedule === "object") {
+        setStaff(staffData.map(s => ({...s, id: Number(s.id)})));
+
+        if (scheduleData && typeof scheduleData === "object") {
           const fixedSchedule = {};
-          Object.entries(results.schedule).forEach(([sid, days]) => {
+          Object.entries(scheduleData).forEach(([sid, days]) => {
             fixedSchedule[Number(sid)] = days;
           });
           setSchedule(fixedSchedule);
         }
-        if (results.settings  && typeof results.settings  === "object") setSettings(s => ({...s, ...results.settings}));
-        if (results.holidays  && Array.isArray(results.holidays))        setHolidays(results.holidays);
-        if (results.vacations && Array.isArray(results.vacations))       setVacations(results.vacations);
-        if (results.locks     && typeof results.locks     === "object")  setLocks(results.locks);
 
-        // Wacht 6 seconden zodat React alle state updates verwerkt
-        // en de auto-save useEffect met de JUISTE data vuurt
+        if (settingsData  && typeof settingsData  === "object") setSettings(s => ({...s, ...settingsData}));
+        if (holidaysData  && Array.isArray(holidaysData))        setHolidays(holidaysData);
+        if (vacationsData && Array.isArray(vacationsData))       setVacations(vacationsData);
+        if (locksData     && typeof locksData     === "object")  setLocks(locksData);
+
         setTimeout(() => {
           isLoaded.current = true;
-        }, 6000);
+          showToast("✅ Data geladen!");
+        }, 3000);
 
-        showToast("✅ Data geladen van Sheets!");
       } else {
-        // Sheets leeg → lokale data gebruiken en uploaden
         isLoaded.current = true;
-        showToast("📋 Sheets leeg, lokale data wordt geüpload...");
+        showToast("📋 Geen data gevonden, lokale data wordt geüpload...");
       }
 
     } catch {
-      showToast("❌ Fout bij laden van Sheets.");
+      showToast("❌ Fout bij laden.");
       isLoaded.current = true;
     } finally {
       setIsAppReady(true);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // Eenmalig laden bij opstart
   useEffect(() => {
@@ -1518,26 +1542,29 @@ const loadFromSheets = useCallback(async () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save — alleen als isLoaded true is
-    useEffect(() => {
+     useEffect(() => {
     if (!isLoaded.current) return;
-    const url = load(SK.gasUrl, "");
-    if (!url) return;
-    const currentData = { staff, schedule, settings, holidays, vacations, locks };
+    const currentStaff     = staff;
+    const currentSchedule  = schedule;
+    const currentSettings  = settings;
+    const currentHolidays  = holidays;
+    const currentVacations = vacations;
+    const currentLocks     = locks;
     const t = setTimeout(async () => {
       try {
-        await Promise.all(
-          Object.entries(currentData).map(([tab, data]) =>
-            fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ tab, data })
-            })
-          )
-        );
+        await Promise.all([
+          sbSet("staff",     currentStaff),
+          sbSet("schedule",  currentSchedule),
+          sbSet("settings",  currentSettings),
+          sbSet("holidays",  currentHolidays),
+          sbSet("vacations", currentVacations),
+          sbSet("locks",     currentLocks),
+        ]);
       } catch {}
-    }, 3000);
+    }, 2000);
     return () => clearTimeout(t);
   }, [staff, schedule, settings, holidays, vacations, locks]);
+
 
 
 
