@@ -475,7 +475,8 @@ const style=`
 body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
 ::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
 .app{display:flex;height:100vh;overflow:hidden;}
-.sidebar{width:224px;min-width:224px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;}
+.sidebar{width:224px;min-width:224px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:transform .25s ease;}
+@media(max-width:768px){.sidebar{position:fixed;top:0;left:0;height:100vh;z-index:300;transform:translateX(-100%);}.sidebar.open{transform:translateX(0);}.main{width:100%;}}
 .sidebar-logo{padding:20px 16px 14px;border-bottom:1px solid var(--border);}
 .logo-main{font-family:'DM Serif Display',serif;font-size:18px;color:var(--gold);letter-spacing:.05em;}
 .logo-sub{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.15em;margin-top:2px;}
@@ -487,9 +488,11 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .nav-item.active{background:var(--surface3);color:var(--gold);font-weight:500;}
 .nav-icon{font-size:15px;width:18px;text-align:center;}
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
-.topbar{height:56px;min-height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:10px;}
-.topbar-title{font-family:'DM Serif Display',serif;font-size:17px;color:var(--text);flex:1;}
-.topbar-actions{display:flex;gap:8px;align-items:center;}
+.topbar{height:56px;min-height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:10px;}
+.topbar-title{font-family:'DM Serif Display',serif;font-size:17px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.topbar-actions{display:flex;gap:6px;align-items:center;}
+.hamburger{display:none;background:none;border:none;color:var(--text);font-size:20px;cursor:pointer;padding:4px 8px;}
+@media(max-width:768px){.hamburger{display:flex;align-items:center;}.topbar{padding:0 10px;}.topbar-title{font-size:14px;}.btn-hide-mobile{display:none !important;}.year-select{max-width:72px;}}
 .year-select{background:var(--surface2);border:1px solid var(--border);color:var(--gold);padding:6px 10px;border-radius:7px;font-size:13px;font-family:'IBM Plex Mono',monospace;cursor:pointer;}
 .year-select:focus{outline:none;border-color:var(--gold-dim);}
 .btn{padding:7px 14px;border-radius:7px;font-size:12px;font-family:'DM Sans',sans-serif;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--text);transition:all .15s;display:flex;align-items:center;gap:6px;}
@@ -506,7 +509,8 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .week-grid th{background:var(--surface2);padding:8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);border:1px solid var(--border);font-weight:500;white-space:nowrap;}
 .week-grid th.weekend{color:var(--gold);}
 .week-grid td{border:1px solid var(--border);padding:3px;vertical-align:top;min-width:88px;}
-.staff-cell{background:var(--surface);padding:6px 8px;font-size:12px;font-weight:500;border-right:2px solid var(--border);white-space:nowrap;max-width:148px;overflow:hidden;text-overflow:ellipsis;}
+.staff-cell{background:var(--surface);padding:6px 8px;font-size:12px;font-weight:500;border-right:2px solid var(--border);white-space:nowrap;max-width:148px;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;z-index:2;}
+@media(max-width:768px){.staff-cell{max-width:80px;font-size:10px;}.week-grid td{min-width:58px;}.shift-cell{min-height:34px;padding:2px 3px;}.shift-label{font-size:10px;}.shift-time{display:none;}}
 .staff-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;}
 .fte-badge{font-size:10px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;margin-left:4px;}
 .flex-badge{font-size:9px;background:#1f2937;color:#9ca3af;padding:1px 5px;border-radius:3px;margin-left:4px;}
@@ -531,7 +535,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .vac-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:6px;}
 .vac-fill{height:100%;border-radius:3px;background:var(--green);transition:width .4s;}
 .vac-fill.warn{background:var(--yellow);}.vac-fill.over{background:var(--red);}
-.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;}
 .settings-section{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:20px;}
 .settings-title{font-family:'DM Serif Display',serif;font-size:16px;color:var(--gold);margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--border);}
 .form-row{margin-bottom:12px;}
@@ -543,7 +547,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .staff-table th{color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.08em;}
 .staff-table tr:hover td{background:var(--surface2);}
 .tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;}
-.year-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+.year-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:12px;}
 .month-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;}
 .month-title{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin-bottom:8px;}
 .month-days{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
@@ -585,6 +589,9 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .pro{color:var(--green);font-size:11px;margin-top:2px;}
 .con{color:var(--red);font-size:11px;margin-top:2px;}
 .lock-date-badge{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--yellow);background:#78350f30;padding:3px 8px;border-radius:4px;border:1px solid #78350f;}
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:299;}
+.sidebar-overlay.open{display:block;}
+@media(max-width:768px){.content{padding:12px;}.modal{width:95vw;padding:16px;}.shift-picker{max-width:210px;}}
 `;
 
 // ─── SHIFT PICKER ────────────────────────────────────────────────────────────
@@ -1253,7 +1260,7 @@ export default function App(){
   const [vacations,setVacations]=useState(()=>load(SK.vacations,VACATIONS_BY_YEAR[2026]||[]));
   const [locks,setLocks]=useState(()=>load(SK.locks,{}));
   const [lockDate,setLockDate]=useState(()=>load("co3_lockdate",null));
-  const [generating,setGenerating]=useState(false);
+  const [generating,setGenerating]=useState(false); const [sidebarOpen,setSidebarOpen]=useState(false);
   const [toast,setToast]=useState(null);
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
@@ -1524,7 +1531,7 @@ const loadFromSheets = useCallback(async () => {
 
 
       <div className="app" style={{opacity:isAppReady?1:0,pointerEvents:isAppReady?"auto":"none"}}>
-        <div className="sidebar">
+        <div className={`sidebar${sidebarOpen?" open":""}`}>
           <div className="sidebar-logo">
             <div className="logo-main">Casino Oostende</div>
             <div className="logo-sub">Live Games Planner</div>
@@ -1533,7 +1540,7 @@ const loadFromSheets = useCallback(async () => {
             <div className="nav-section">
               <div className="nav-label">Planning</div>
               {navItems.map(item=>(
-                <button key={item.id} className={`nav-item ${view===item.id?"active":""}`} onClick={()=>setView(item.id)}>
+                <button key={item.id} className={`nav-item ${view===item.id?"active":""}`} onClick={()=>{setView(item.id);setSidebarOpen(false);}}>
                   <span className="nav-icon">{item.icon}</span>{item.label}
                 </button>
               ))}
@@ -1558,9 +1565,10 @@ const loadFromSheets = useCallback(async () => {
           </div>
         </div>
 
-        <div className="main">
-          <div className="topbar">
-            <div className="topbar-title">{topbarTitle}</div>
+        <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={()=>setSidebarOpen(false)}/>         <div className="main">
+         <div className="topbar">
+  <button className="hamburger" onClick={()=>setSidebarOpen(o=>!o)} aria-label="Menu">☰</button>
+  <div className="topbar-title">{topbarTitle}</div>
             <div className="topbar-actions">
               <select className="year-select" value={year} onChange={e=>handleYearChange(e.target.value)} disabled={!isAppReady}>
                 {YEAR_RANGE.map(y=><option key={y} value={y}>{y}</option>)}
@@ -1572,8 +1580,8 @@ const loadFromSheets = useCallback(async () => {
                   <button className="btn" onClick={()=>setWeekNum(w=>Math.min(weeksInYear,w+1))} disabled={!isAppReady}>Volgende →</button>
                 </>
               )}
-              <button className="btn" onClick={exportCSV} disabled={!isAppReady}>⬇ CSV</button>
-              <button className="btn" onClick={exportJSON} disabled={!isAppReady}>💾 Backup</button>
+             <button className="btn btn-hide-mobile" onClick={exportCSV} disabled={!isAppReady}>⬇ CSV</button>
+<button className="btn btn-hide-mobile" onClick={exportJSON} disabled={!isAppReady}>💾 Backup</button>
             </div>
           </div>
 
