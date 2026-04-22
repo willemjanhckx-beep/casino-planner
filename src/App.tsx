@@ -108,7 +108,7 @@ const INITIAL_STAFF = [
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 const SK = { staff:"co3_staff", schedule:"co3_schedule", settings:"co3_settings",
              holidays:"co3_holidays", vacations:"co3_vacations", year:"co3_year",
-             locks:"co3_locks", gasUrl:"co3_gasurl" };
+             locks:"co3_locks" };
 function load(k,fb){ try{ const r=localStorage.getItem(k); return r?JSON.parse(r):fb; }catch{ return fb; } }
 function save(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 
@@ -1253,7 +1253,6 @@ export default function App(){
   const [vacations,setVacations]=useState(()=>load(SK.vacations,VACATIONS_BY_YEAR[2026]||[]));
   const [locks,setLocks]=useState(()=>load(SK.locks,{}));
   const [lockDate,setLockDate]=useState(()=>load("co3_lockdate",null));
-  const [gasUrl,setGasUrl]=useState(()=>load(SK.gasUrl,"https://script.google.com/macros/s/AKfycbwLIOsHAfEuZrwryU6EqCmXZMT89mZ0Xw36bL7srECscXEj6NAhC2yxfFujiTR0ZyDb-g/exec"));
   const [generating,setGenerating]=useState(false);
   const [toast,setToast]=useState(null);
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
@@ -1284,7 +1283,6 @@ useEffect(()=>{ save(SK.holidays,holidays); },[holidays]);
 useEffect(()=>{ save(SK.vacations,vacations); },[vacations]);
 useEffect(()=>{ save(SK.locks,locks); },[locks]);
 useEffect(()=>{ save("co3_lockdate",lockDate); },[lockDate]);
-useEffect(()=>{ save(SK.gasUrl,gasUrl); },[gasUrl]);
 useEffect(()=>{ save("co3_motiv_on",motivatieEnabled); },[motivatieEnabled]);
 useEffect(()=>{ save("co3_motiv_freq",motivatieFreq); },[motivatieFreq]);
 useEffect(()=>{ save(SK.year,year); },[year]);
@@ -1585,7 +1583,7 @@ const loadFromSheets = useCallback(async () => {
             {view==="stats"&&<StaffStats staff={staff} schedule={schedule} year={year} holidays={holidays}/>}
             {view==="staff"&&<StaffManager staff={staff} setStaff={setStaff} schedule={schedule} year={year}/>}
             {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq} showToast={showToast}/>}
-            {view==="storage"&&<StorageView onExport={exportJSON} onImport={importJSON} gasUrl={gasUrl} setGasUrl={setGasUrl} onSaveToSheets={saveToSheets} onLoadFromSheets={loadFromSheets}/>}
+            {view==="storage"&&<StorageView onExport={exportJSON} onImport={importJSON} onSaveToSheets={saveToSheets} onLoadFromSheets={loadFromSheets}/>}
           </div>
         </div>
       </div>
