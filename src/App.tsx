@@ -1089,55 +1089,7 @@ function StaffManager({staff,setStaff,schedule,year}){
   );
 }
 
-// ─── GAS INFO MODAL ───────────────────────────────────────────────────────────
-function GasInfoModal({onClose}){
-  const gasCode=`// == Google Apps Script == 
-// Ga naar script.google.com → Nieuw project
 
-const SHEET_ID = "JOUW_SPREADSHEET_ID";
-
-function doGet(e) {
-  const tab = e.parameter.tab || "data";
-  const sheet = SpreadsheetApp.openById(SHEET_ID)
-                  .getSheetByName(tab);
-  const val = sheet ? sheet.getRange(1,1).getValue() : "{}";
-  return ContentService
-    .createTextOutput(val || "{}")
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function doPost(e) {
-  const body = JSON.parse(e.postData.contents);
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  let sheet = ss.getSheetByName(body.tab);
-  if (!sheet) sheet = ss.insertSheet(body.tab);
-  sheet.getRange(1,1).setValue(
-    JSON.stringify(body.data));
-  return ContentService
-    .createTextOutput("OK")
-    .setMimeType(ContentService.MimeType.TEXT);
-}`;
-
-  return(
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{width:600}} onClick={e=>e.stopPropagation()}>
-        <div className="modal-title">📊 Google Sheets koppeling — Stap voor stap</div>
-        <div className="gas-steps">
-          <div className="gas-step"><div><strong>Google Sheet aanmaken</strong><br/><span style={{fontSize:12,color:"var(--text-dim)"}}>Ga naar sheets.google.com → Nieuw leeg spreadsheet. Kopieer de ID uit de URL (het lange getal tussen /d/ en /edit).</span></div></div>
-          <div className="gas-step"><div><strong>Apps Script openen</strong><br/><span style={{fontSize:12,color:"var(--text-dim)"}}>In je Sheet: Extensies → Apps Script. Verwijder de standaard code en plak onderstaande code.</span></div></div>
-          <div className="gas-step"><div><strong>SHEET_ID invullen</strong><br/><span style={{fontSize:12,color:"var(--text-dim)"}}>Vervang "JOUW_SPREADSHEET_ID" met de ID van je sheet. Sla op met Ctrl+S.</span></div></div>
-          <div className="gas-step"><div><strong>Web App deployen</strong><br/><span style={{fontSize:12,color:"var(--text-dim)"}}>Klik Implementeren → Nieuwe implementatie → Type: Web-app. Stel in: Uitvoeren als: Ik. Toegang: Iedereen. Kopieer de Web App URL.</span></div></div>
-          <div className="gas-step"><div><strong>URL invullen in de planner</strong><br/><span style={{fontSize:12,color:"var(--text-dim)"}}>Plak de Web App URL in het veld "Google Sheets URL" in Opslag & Backup. Klik Verbinden en test met Opslaan naar Sheets.</span></div></div>
-        </div>
-        <div className="gas-code">{gasCode}</div>
-        <div style={{marginTop:14,padding:12,background:"var(--surface3)",borderRadius:8,fontSize:12,color:"var(--text-dim)"}}>
-          <strong style={{color:"var(--gold)"}}>Meerdere gebruikers?</strong> Iedereen die dezelfde Web App URL heeft kan de data lezen en schrijven. De data staat in het Google Sheet — open het sheet om wijzigingen te zien in real-time. Je kan de toegang beheren via de Google Sheet instellingen.
-        </div>
-        <div className="modal-actions"><button className="btn btn-primary" onClick={onClose}>Begrepen ✓</button></div>
-      </div>
-    </div>
-  );
-}
 
 // ─── SETTINGS VIEW ────────────────────────────────────────────────────────────
 function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq,showToast}){
