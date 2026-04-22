@@ -36,12 +36,9 @@ async function sbSet(key, value) {
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const SHIFTS = {
-  MORNING:  { id:"morning",  label:"Dag",     time:"15:00–21:00", startHour:15, endHour:21,  hours:6,   color:"#f59e0b", bg:"#78350f" },
-  EVENING:  { id:"evening",  label:"Avond",   time:"21:00–05:00", startHour:21, endHour:29,  hours:8,   color:"#3b82f6", bg:"#1e3a5f" },
-  NIGHT:    { id:"night",    label:"Nacht",   time:"21:00–05:30", startHour:21, endHour:29.5,hours:8.5, color:"#8b5cf6", bg:"#3b0764" },
-  OFF:      { id:"off",      label:"Vrij",    time:"",            startHour:0,  endHour:0,   hours:0,   color:"#374151", bg:"#111827" },
-  VACATION: { id:"vacation", label:"Vakantie",time:"",            startHour:0,  endHour:0,   hours:0,   color:"#065f46", bg:"#022c22" },
-  SICK:     { id:"sick",     label:"Ziek",    time:"",            startHour:0,  endHour:0,   hours:0,   color:"#7f1d1d", bg:"#450a0a" },
+  OFF:      { id:"off",      label:"Vrij",    time:"",  startHour:0,  endHour:0,   hours:0, color:"#374151", bg:"#111827" },
+  VACATION: { id:"vacation", label:"Vakantie",time:"",  startHour:0,  endHour:0,   hours:0, color:"#065f46", bg:"#022c22" },
+  SICK:     { id:"sick",     label:"Ziek",    time:"",  startHour:0,  endHour:0,   hours:0, color:"#7f1d1d", bg:"#450a0a" },
 };
 const FTE_VACATION = { 1.0:24, 0.8:19, 0.5:12 };
 const CONTRACT_TYPES = [
@@ -162,13 +159,21 @@ function lockKey(sid,ds){ return `${sid}::${ds}`; }
 // ─── GENERATOR ───────────────────────────────────────────────────────────────
 
 const SHIFT_POOLS = [
-  { start: 15.0, duration: 7.0 },
-  { start: 16.5, duration: 7.0 },
-  { start: 18.0, duration: 7.5 },
-  { start: 19.0, duration: 7.0 },
-  { start: 20.0, duration: 7.5 },
-  { start: 21.0, duration: 8.0 },
-  { start: 22.5, duration: 7.0 },
+  { start: 15.0, duration: 6.0,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
+  { start: 15.5, duration: 7.0,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
+  { start: 16.0, duration: 7.0,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
+  { start: 16.5, duration: 7.5,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
+  { start: 17.0, duration: 7.0,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
+  { start: 17.5, duration: 7.5,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
+  { start: 18.0, duration: 7.0,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
+  { start: 18.5, duration: 7.5,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
+  { start: 19.0, duration: 7.0,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
+  { start: 20.0, duration: 7.5,  label:"Laat",  color:"#8b5cf6", bg:"#3b0764" },
+  { start: 20.5, duration: 8.0,  label:"Laat",  color:"#8b5cf6", bg:"#3b0764" },
+  { start: 21.0, duration: 7.5,  label:"Laat",  color:"#8b5cf6", bg:"#3b0764" },
+  { start: 21.5, duration: 8.0,  label:"Nacht", color:"#06b6d4", bg:"#0c3547" },
+  { start: 22.0, duration: 7.5,  label:"Nacht", color:"#06b6d4", bg:"#0c3547" },
+  { start: 22.5, duration: 7.0,  label:"Nacht", color:"#06b6d4", bg:"#0c3547" },
 ];
 
 function getPersonalShift(staffId, dayOfYear, hoursRatio) {
@@ -179,10 +184,8 @@ function getPersonalShift(staffId, dayOfYear, hoursRatio) {
   return SHIFT_POOLS[Math.max(0, Math.min(rawIdx, len - 1))];
 }
 
-function deriveShiftId(startHour) {
-  if (startHour < 18) return "morning";
-  if (startHour < 21) return "evening";
-  return "night";
+function deriveShiftId(start: number, duration: number): string {
+  return makeShiftId(start, duration);
 }
 
 function getTargetHours(s) {
@@ -190,15 +193,15 @@ function getTargetHours(s) {
   return s.fte * 38 * 52;
 }
 
-function getShiftEndAbsolute(ds, shiftId) {
-  const shift = SHIFTS[shiftId?.toUpperCase()];
-  if (!shift || shift.hours === 0) return 0;
+function getShiftEndAbsolute(ds: string, shiftId: string): number {
+  const disp = getShiftDisplay(shiftId);
+  if (!disp || disp.hours === 0) return 0;
   const dayStartHours = new Date(ds).getTime() / (1000 * 60 * 60);
-  return dayStartHours + shift.startHour + shift.hours;
+  return dayStartHours + disp.startHour + disp.hours;
 }
 
 function hasEnoughRest(prevDs, prevShiftId, nextDs, minRestHours) {
-  const prevShift = SHIFTS[prevShiftId?.toUpperCase()];
+  const prevShift = getShiftDisplay(prevShiftId || "off");
   if (!prevShift || prevShift.hours === 0) return true;
   const prevEnd = getShiftEndAbsolute(prevDs, prevShiftId);
   if (prevEnd === 0) return true;
@@ -281,8 +284,9 @@ function isCoverageSufficient(ds, currentSchedule, staff, demand) {
   let morning = 0, evening = 0;
   staff.forEach(s => {
     const sh = (currentSchedule[s.id] || {})[ds];
-    if (sh === "morning") morning++;
-    if (sh === "evening" || sh === "night") evening++;
+    const disp = getShiftDisplay(sh || "off");
+    if (disp.hours > 0 && disp.startHour < 17) morning++;
+    if (disp.hours > 0 && disp.startHour >= 17) evening++;
   });
   return morning >= demand.morning && evening >= demand.evening;
 }
@@ -309,6 +313,55 @@ function getBlockCoverage(ds, currentSchedule, staff) {
     });
   });
   return coverage;
+}
+
+type AssignedShift = {
+  id: string;           // "shift_15.0_6.0"
+  label: string;
+  time: string;         // "15:00–21:00"
+  startHour: number;
+  endHour: number;
+  hours: number;
+  color: string;
+  bg: string;
+};
+
+function makeShiftId(start: number, duration: number): string {
+  return `shift_${start}_${duration}`;
+}
+
+function parseShiftId(id: string): AssignedShift | null {
+  if (!id || !id.startsWith("shift_")) return null;
+  const parts = id.replace("shift_", "").split("_");
+  if (parts.length < 2) return null;
+  const start = parseFloat(parts[0]);
+  const duration = parseFloat(parts[1]);
+  const pool = SHIFT_POOLS.find(p => p.start === start && p.duration === duration);
+  if (!pool) return null;
+  const endHour = start + duration;
+  const fmt = (h: number) => {
+    const realH = h >= 24 ? h - 24 : h;
+    return `${String(Math.floor(realH)).padStart(2,"0")}:${realH % 1 === 0.5 ? "30" : "00"}`;
+  };
+  return {
+    id,
+    label: pool.label,
+    time: `${fmt(start)}–${fmt(endHour)}`,
+    startHour: start,
+    endHour,
+    hours: duration,
+    color: pool.color,
+    bg: pool.bg,
+  };
+}
+
+function getShiftDisplay(shiftId: string): AssignedShift {
+  if (!shiftId || shiftId === "off")      return { id:"off",      label:"Vrij",    time:"", startHour:0, endHour:0, hours:0, color:"#374151", bg:"#111827" };
+  if (shiftId === "vacation")             return { id:"vacation", label:"Vakantie",time:"", startHour:0, endHour:0, hours:0, color:"#065f46", bg:"#022c22" };
+  if (shiftId === "sick")                 return { id:"sick",     label:"Ziek",    time:"", startHour:0, endHour:0, hours:0, color:"#7f1d1d", bg:"#450a0a" };
+  const parsed = parseShiftId(shiftId);
+  if (parsed) return parsed;
+  return { id:"off", label:"Vrij", time:"", startHour:0, endHour:0, hours:0, color:"#374151", bg:"#111827" };
 }
 
 function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
@@ -370,86 +423,66 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const assigned = new Set();
     all.forEach(s => { if (locks[lockKey(s.id, ds)]) assigned.add(s.id); });
 
-    // ── 1. Avond/nacht pool ──────────────────────────────────────────────────
-    const eveningPool = sortByNeed(available.filter(s => !assigned.has(s.id)));
-    let eveningAssigned = 0;
+    // ── Kies een shift per kandidaat op basis van jaaruurssaldo + diversiteit ──
+    const needsDag   = demand.morning;
+    const needsAvond = demand.evening;
+    let dagCount   = 0;
+    let avondCount = 0;
 
-    for (const s of eveningPool) {
-      if (eveningAssigned >= demand.evening) break;
-      const allEveningShifts = SHIFT_POOLS.filter(sh => sh.start >= 18);
-      const shift = allEveningShifts[(s.id * 3 + dayIdx) % allEveningShifts.length];
-      const shiftId = deriveShiftId(shift.start);
+    // Dagshifts: start < 17u
+    const dagPool   = SHIFT_POOLS.filter(sh => sh.start < 17);
+    // Avond/laat/nachtshifts: start >= 17u
+    const avondPool = SHIFT_POOLS.filter(sh => sh.start >= 17);
+
+    const candidates = sortByNeed(available.filter(s => !assigned.has(s.id)));
+
+    // Eerst avond/nacht vullen (hogere prioriteit voor bezetting)
+    for (const s of candidates) {
+      if (avondCount >= needsAvond) break;
+      // Kies shift: roteer op basis van staffId + dayIdx voor spreiding
+      const pool = avondPool;
+      const shiftTemplate = pool[(s.id * 7 + dayIdx * 3) % pool.length];
+      // Kleine persoonlijke variatie op duur (±0 of +0.5u) voor realisme
+      const durationVariant = ((s.id + dayIdx) % 3 === 0) ? shiftTemplate.duration + 0.5 : shiftTemplate.duration;
+      const clampedDuration = Math.min(8.5, Math.max(6, durationVariant));
+      const shiftId = makeShiftId(shiftTemplate.start, clampedDuration);
 
       schedule[s.id][ds]      = shiftId;
-      hoursWorked[s.id]      += shift.duration;
-      stats[s.id].totalHours += shift.duration;
-
-      if (shiftId === "night") { stats[s.id].consecutiveNights++; stats[s.id].nightShifts++; }
-      else                     { stats[s.id].consecutiveNights = 0; }
-
+      hoursWorked[s.id]      += clampedDuration;
+      stats[s.id].totalHours += clampedDuration;
+      stats[s.id].consecutiveNights = shiftTemplate.start >= 21
+        ? stats[s.id].consecutiveNights + 1
+        : 0;
+      if (shiftTemplate.start >= 21) stats[s.id].nightShifts++;
       if (isWeekend(d)) stats[s.id].weekendShifts++;
       assigned.add(s.id);
-      eveningAssigned++;
+      avondCount++;
     }
 
-    // ── 2. Dag pool ──────────────────────────────────────────────────────────
-    const morningPool = sortByNeed(available.filter(s => !assigned.has(s.id)));
-    let morningAssigned = 0;
+    // Dan dagshifts
+    const remainingCandidates = sortByNeed(available.filter(s => !assigned.has(s.id)));
+    for (const s of remainingCandidates) {
+      if (dagCount >= needsDag) break;
+      const shiftTemplate = dagPool[(s.id * 5 + dayIdx * 2) % dagPool.length];
+      const durationVariant = ((s.id + dayIdx) % 4 === 0) ? shiftTemplate.duration + 0.5 : shiftTemplate.duration;
+      const clampedDuration = Math.min(8, Math.max(6, durationVariant));
+      const shiftId = makeShiftId(shiftTemplate.start, clampedDuration);
 
-    for (const s of morningPool) {
-      if (morningAssigned >= demand.morning) break;
-      const allMorningShifts = SHIFT_POOLS.filter(sh => sh.start < 18);
-      const shift = allMorningShifts[(s.id * 2 + dayIdx) % allMorningShifts.length];
-
-      schedule[s.id][ds]             = "morning";
-      hoursWorked[s.id]             += shift.duration;
-      stats[s.id].totalHours        += shift.duration;
-      stats[s.id].consecutiveNights  = 0;
-
+      schedule[s.id][ds]      = shiftId;
+      hoursWorked[s.id]      += clampedDuration;
+      stats[s.id].totalHours += clampedDuration;
+      stats[s.id].consecutiveNights = 0;
       if (isWeekend(d)) stats[s.id].weekendShifts++;
       assigned.add(s.id);
-      morningAssigned++;
+      dagCount++;
     }
 
-    // ── 3. Tijdblok-check: herverdeel indien een blok onderbezet is ──────────
-    const blockCoverage = getBlockCoverage(ds, schedule, all);
-    const minPerBlock   = Math.max(1, Math.floor(demand.evening / TIME_BLOCKS.length));
-
-    for (const block of blockCoverage) {
-      if (block.count >= minPerBlock) continue;
-      // Zoek iemand die beschikbaar is en nog niet ingepland, of van dag naar avond kan
-      const candidate = sortByNeed(
-        available.filter(s => {
-          if (assigned.has(s.id)) return false;
-          return true;
-        })
-      )[0];
-      if (!candidate) continue;
-
-      const shiftForBlock = SHIFT_POOLS.find(sh => sh.start >= block.start && sh.start < block.end)
-                         || SHIFT_POOLS.find(sh => sh.start >= 18);
-      if (!shiftForBlock) continue;
-
-      const shiftId = deriveShiftId(shiftForBlock.start);
-      schedule[candidate.id][ds]      = shiftId;
-      hoursWorked[candidate.id]      += shiftForBlock.duration;
-      stats[candidate.id].totalHours += shiftForBlock.duration;
-
-      if (shiftId === "night") { stats[candidate.id].consecutiveNights++; stats[candidate.id].nightShifts++; }
-      else                     { stats[candidate.id].consecutiveNights = 0; }
-
-      if (isWeekend(d)) stats[candidate.id].weekendShifts++;
-      assigned.add(candidate.id);
-    }
-
-    // ── 4. Niet-ingeplanden krijgen vrij ─────────────────────────────────────
+    // ── Niet-ingeplanden krijgen vrij ────────────────────────────────────────
     all.forEach(s => {
       if (assigned.has(s.id)) return;
       schedule[s.id][ds]            = "off";
       stats[s.id].consecutiveNights = 0;
     });
-  }
-
   // Stats afronden met expected/planned/difference
   all.forEach(s => {
     const target         = getTargetHours(s);
@@ -599,13 +632,39 @@ function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
   useEffect(()=>{ const h=()=>onClose(); window.addEventListener("click",h); return()=>window.removeEventListener("click",h); },[onClose]);
   return(
     <div className="shift-picker" style={{top:pos.y,left:Math.min(pos.x,window.innerWidth-240)}} onClick={e=>e.stopPropagation()}>
-      {Object.values(SHIFTS).map(s=>(
+      {/* Vaste statussen */}
+      {[
+        {id:"off",      label:"Vrij",    time:"", color:"#374151", bg:"#111827"},
+        {id:"vacation", label:"Vakantie",time:"", color:"#065f46", bg:"#022c22"},
+        {id:"sick",     label:"Ziek",    time:"", color:"#7f1d1d", bg:"#450a0a"},
+      ].map(s=>(
         <div key={s.id} className="shift-option" style={{background:s.bg,color:s.color}} onClick={()=>{onSelect(s.id);onClose();}}>
           <div style={{width:8,height:8,borderRadius:3,background:s.color}}/>
-          <span style={{minWidth:60}}>{s.label}</span>
-          {s.time&&<span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{s.time}</span>}
+          <span>{s.label}</span>
         </div>
       ))}
+      <div style={{borderTop:"1px solid var(--border)",margin:"4px 0",fontSize:10,color:"var(--text-dim)",padding:"4px 0 2px"}}>— Dag shifts —</div>
+      {SHIFT_POOLS.filter(p=>p.start<17).map(p=>{
+        const disp=getShiftDisplay(makeShiftId(p.start,p.duration));
+        return(
+          <div key={disp.id} className="shift-option" style={{background:disp.bg,color:disp.color}} onClick={()=>{onSelect(disp.id);onClose();}}>
+            <div style={{width:8,height:8,borderRadius:3,background:disp.color}}/>
+            <span style={{minWidth:50}}>{disp.label}</span>
+            <span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{disp.time}</span>
+          </div>
+        );
+      })}
+      <div style={{borderTop:"1px solid var(--border)",margin:"4px 0",fontSize:10,color:"var(--text-dim)",padding:"4px 0 2px"}}>— Avond / Nacht shifts —</div>
+      {SHIFT_POOLS.filter(p=>p.start>=17).map(p=>{
+        const disp=getShiftDisplay(makeShiftId(p.start,p.duration));
+        return(
+          <div key={disp.id} className="shift-option" style={{background:disp.bg,color:disp.color}} onClick={()=>{onSelect(disp.id);onClose();}}>
+            <div style={{width:8,height:8,borderRadius:3,background:disp.color}}/>
+            <span style={{minWidth:50}}>{disp.label}</span>
+            <span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{disp.time}</span>
+          </div>
+        );
+      })}
       <div style={{borderTop:"1px solid var(--border)",marginTop:4,paddingTop:4}}>
         <div className="shift-option" style={{background:isLocked?"#1e3a5f30":"#1e3a5f",color:"#60a5fa"}}
           onClick={()=>{onToggleLock();onClose();}}>
@@ -687,7 +746,7 @@ const handleSelect=useCallback((shiftId)=>{
     const ds=toDS(date);
     const demand=getDayDemand(ds,settings,holidays,vacations);
     let morning=0,evening=0;
-    staff.forEach(s=>{ const sh=(schedule[s.id]||{})[ds]; if(sh==="morning") morning++; if(sh==="evening"||sh==="night") evening++; });
+    staff.forEach(s=>{       const sh=(schedule[s.id]||{})[ds];       const disp=getShiftDisplay(sh||"off");       if(disp.hours>0 && disp.startHour<17) morning++;       if(disp.hours>0 && disp.startHour>=17) evening++;     });
     return{morning,evening,demMorning:demand.morning,demEvening:demand.evening,ds};
   });
 
@@ -731,7 +790,7 @@ const handleSelect=useCallback((shiftId)=>{
       {dates.map((d,i)=>{
         const ds=toDS(d);
         const shiftId=(schedule[s.id]||{})[ds]||"off";
-        const shift=SHIFTS[shiftId?.toUpperCase()]||SHIFTS.OFF;
+        const shift=getShiftDisplay(shiftId);
         const rawLock=locks[lockKey(s.id,ds)];
 const isLocked=rawLock===true;
 const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate);
@@ -876,11 +935,12 @@ function StaffStats({staff, schedule, year, holidays}) {
       const shift = SHIFTS[shiftId?.toUpperCase()];
       if (!shift) return;
       if (shiftId === "vacation") { vacUsed++; return; }
-      if (shift.hours === 0) return;
-      totalHours += shift.hours;
+      const disp = getShiftDisplay(shiftId);
+      if (!disp || disp.hours === 0) return;
+      totalHours += disp.hours;
       const date = new Date(ds);
       if (isWeekend(date))                            weekendShifts++;
-      if (shiftId === "evening" || shiftId === "night") nightShifts++;
+      if (disp.startHour >= 21) nightShifts++;
       if (isHoliday(ds, holidays))                    holidayShifts++;
     });
 
