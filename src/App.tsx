@@ -188,13 +188,17 @@ function deriveShiftId(start: number, duration: number): string {
   return makeShiftId(start, duration);
 }
 
-function getTargetHours(s) {
-  if (s.isFlexijob) return 9999;
-  const brutoDagen = s.fte * 260; // 52 weken * 5 dagen
-  const uurPerDag  = 38 / 5;     // 7.6u per werkdag
-  const nettoDagen = brutoDagen - (s.vacationDays || 0);
-  return Math.round(nettoDagen * uurPerDag);
-}
+function getTarget(s) {
+    if (s.isFlexijob) return 9999;
+    // Beschikbare dagen per week bepaalt het werkritme
+    const beschikbaarPerWeek = s.availableDays ? s.availableDays.length : 7;
+    const werkdagenPerWeek   = Math.min(beschikbaarPerWeek, getCap(s));
+    // Netto werkdagen per jaar = werkweken * werkdagen - vakantie
+    const nettoDagen = 52 * werkdagenPerWeek - (s.vacationDays || 0);
+    // Uurloon per dag: contracturen / 5 werkdagen
+    const uurPerDag  = (s.fte * 38) / 5;
+    return Math.round(nettoDagen * uurPerDag);
+  }
 
 function getShiftEndAbsolute(ds: string, shiftId: string): number {
   const disp = getShiftDisplay(shiftId);
@@ -382,8 +386,10 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     if (!isAvailOnDate(s, ds, isoWeek)) return false;
     // Gelockt
     if (locks[lockKey(s.id, ds)]) return false;
-    // Weekcap bereikt
+   // Weekcap bereikt
     if (dtw[s.id] >= getCap(s)) return false;
+    // Target al gehaald (+ 3% marge voor afrondingen)
+    if (!s.isFlexijob && hoursWorked[s.id] >= getTarget(s) * 1.03) return false;
     // Max opeenvolgende nachten
     if (stats[s.id].consecutiveNights >= (settings.maxConsecNights || 4)) return false;
     // Rusttijd na vorige shift
