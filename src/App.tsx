@@ -190,7 +190,10 @@ function deriveShiftId(start: number, duration: number): string {
 
 function getTargetHours(s) {
   if (s.isFlexijob) return 9999;
-  return s.fte * 38 * 52;
+  const brutoDagen = s.fte * 260; // 52 weken * 5 dagen
+  const uurPerDag  = 38 / 5;     // 7.6u per werkdag
+  const nettoDagen = brutoDagen - (s.vacationDays || 0);
+  return Math.round(nettoDagen * uurPerDag);
 }
 
 function getShiftEndAbsolute(ds: string, shiftId: string): number {
@@ -373,13 +376,9 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   }
 
   function canWork(s, ds, d, isoWeek) {
-    // Beschikbaarheid
     if (!isAvailOnDate(s, ds, isoWeek)) return false;
-    // Gelockt
     if (locks[lockKey(s.id, ds)]) return false;
-    // Max opeenvolgende nachten
     if (stats[s.id].consecutiveNights >= (settings.maxConsecNights || 4)) return false;
-    // Rusttijd na vorige shift
     const prevDate = new Date(d);
     prevDate.setDate(prevDate.getDate() - 1);
     const prevDs    = toDS(prevDate);
@@ -387,9 +386,16 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     if (prevShift && !["off","vacation","sick"].includes(prevShift)) {
       if (!hasEnoughRest(prevDs, prevShift, ds, settings.minRestHours || 11)) return false;
     }
-    // Niet meer dan max werkdagen per week
-    if (daysWorkedThisWeek[s.id] >= targetDaysPerWeek(s)) return false;
+    // Harde cap: max 6 dagen/week (1 dag rust gegarandeerd)
+    if (daysWorkedThisWeek[s.id] >= 6) return false;
     return true;
+  }
+
+  function wantMoreHours(s) {
+    // Zachte check: heeft deze persoon nog uren nodig op basis van tempo?
+    const target    = getTargetHours(s);
+    const remaining = target - hoursWorked[s.id];
+    return remaining > avgShiftHours(s) * 0.5;
   }
 
   function hoursRatio(s) {
@@ -411,13 +417,13 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const shiftTemplate   = pool[(s.id * 7 + dayIdx * 3) % pool.length];
     const durationVariant = ((s.id + dayIdx) % 3 === 0)
       ? shiftTemplate.duration + 0.5 : shiftTemplate.duration;
-    const dur    = Math.min(8.5, Math.max(6, durationVariant));
+    const dur     = Math.min(8.5, Math.max(6, durationVariant));
     const shiftId = makeShiftId(shiftTemplate.start, dur);
 
-    schedule[s.id][ds]      = shiftId;
-    hoursWorked[s.id]       += dur;
-    stats[s.id].totalHours  += dur;
-    daysWorkedThisWeek[s.id]++;
+    schedule[s.id][ds]       = shiftId;
+    hoursWorked[s.id]        += dur;
+    stats[s.id].totalHours   += dur;
+    daysWorkedThisWeek[s.id] = (daysWorkedThisWeek[s.id] || 0) + 1;
 
     if (shiftTemplate.start >= 21) {
       stats[s.id].consecutiveNights++;
@@ -479,11 +485,25 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       }
     });
 
-    // Pool van beschikbare medewerkers
+// Beschikbaar = canWork (incl. harde cap van 6 dagen)
     const available = all.filter(s => !assigned.has(s.id) && canWork(s, ds, d, isoWeek));
-    const sorted    = sortByNeed(available);
 
-    // ── FASE 1: Avond minimum ────────────────────────────────────────────────
+    // Sorteer: meeste uren-tekort eerst
+    const sorted = sortByNeed(available);
+
+    // Helper: tel bezetting van assigned voor deze dag
+    function countBezetting() {
+      let avond = 0, dag = 0;
+      assigned.forEach(id => {
+        const sh   = (schedule[id] || {})[ds];
+        const disp = getShiftDisplay(sh || "off");
+        if (disp.hours > 0 && disp.startHour >= 17) avond++;
+        if (disp.hours > 0 && disp.startHour < 17)  dag++;
+      });
+      return { avond, dag };
+    }
+
+    // ── FASE 1: Minimum avond — ALTIJD halen, ook als iemand weekcap nadert ──
     let avondCount = 0;
     for (const s of sorted) {
       if (avondCount >= demand.evening) break;
@@ -493,43 +513,42 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       avondCount++;
     }
 
-    // ── FASE 1b: Dag minimum ─────────────────────────────────────────────────
-    const sortedDag = sortByNeed(available.filter(s => !assigned.has(s.id)));
+    // ── FASE 1b: Minimum dag ─────────────────────────────────────────────────
+    const sortedNaAvond = sortByNeed(available.filter(s => !assigned.has(s.id)));
     let dagCount = 0;
-    for (const s of sortedDag) {
+    for (const s of sortedNaAvond) {
       if (dagCount >= demand.morning) break;
       doAssign(s, ds, d, dayIdx, dagPool);
       assigned.add(s.id);
       dagCount++;
     }
 
-   // ── FASE 2: Extra medewerkers inplannen op basis van uren-target ─────────
+    // ── FASE 2: Iedereen met uren-tekort inplannen ───────────────────────────
     const daysLeft = totalDays - dayOfYear;
-    const extras   = sortByNeed(available.filter(s => !assigned.has(s.id) && !s.isFlexijob));
+    // Sorteer op grootste tekort eerst — niet op ratio maar op absolute uren
+    const extras = available
+      .filter(s => !assigned.has(s.id) && !s.isFlexijob && wantMoreHours(s))
+      .sort((a, b) => {
+        const remA = getTargetHours(a) - hoursWorked[a.id];
+        const remB = getTargetHours(b) - hoursWorked[b.id];
+        // Normaliseer per dag zodat iemand met meer contracturen niet altijd wint
+        const tempoA = remA / Math.max(daysLeft, 1);
+        const tempoB = remB / Math.max(daysLeft, 1);
+        return tempoB - tempoA; // hoogste tempo eerst
+      });
 
     for (const s of extras) {
-      const target    = getTargetHours(s);
-      const remaining = target - hoursWorked[s.id];
-      if (remaining <= avgShiftHours(s) * 0.5) continue; // target nagenoeg gehaald
-
-      // Uren-tempo: hoeveel uur per dag moeten we nog presteren?
-      // Als remaining/daysLeft > gemiddelde shiftduur * 0.4 → vandaag werken
+      const remaining       = getTargetHours(s) - hoursWorked[s.id];
       const urenPerDagNodig = remaining / Math.max(daysLeft, 1);
-      if (urenPerDagNodig < avgShiftHours(s) * 0.4) continue;
 
-      // Balanceer dag/avond bezetting
-      const avondBezet = [...assigned].filter(id => {
-        const sh = (schedule[id] || {})[ds];
-        const disp = getShiftDisplay(sh || "off");
-        return disp.hours > 0 && disp.startHour >= 17;
-      }).length;
-      const dagBezet = [...assigned].filter(id => {
-        const sh = (schedule[id] || {})[ds];
-        const disp = getShiftDisplay(sh || "off");
-        return disp.hours > 0 && disp.startHour < 17;
-      }).length;
+      // Plan in als tempo hoog genoeg: nodig meer dan halve gemiddelde shift per resterende dag
+      if (urenPerDagNodig < avgShiftHours(s) * 0.35) continue;
 
-      const pool = avondBezet <= dagBezet ? avondPool : dagPool;
+      // Weekdagen-check als zachte rem (niet hard blokkeren)
+      if (daysWorkedThisWeek[s.id] >= targetDaysPerWeek(s)) continue;
+
+      const { avond, dag } = countBezetting();
+      const pool = avond <= dag ? avondPool : dagPool;
       doAssign(s, ds, d, dayIdx, pool);
       assigned.add(s.id);
     }
