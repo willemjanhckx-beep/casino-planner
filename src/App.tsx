@@ -333,14 +333,21 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   const daysWorkedThisWeek = {};
   const lastShiftEnd = {};
 
-  all.forEach(s => {
+ all.forEach(s => {
     schedule[s.id]           = { ...(existingSchedule[s.id] || {}) };
-    hoursWorked[s.id]        = 0;
     daysWorkedThisWeek[s.id] = 0;
     lastShiftEnd[s.id]       = 0;
     stats[s.id]              = { weekendShifts:0, nightShifts:0, totalHours:0, consecutiveNights:0 };
-  });
 
+    // Eenmalig: tel bestaande (locked) uren op
+    let worked = 0;
+    Object.entries(existingSchedule[s.id] || {}).forEach(([ds, shiftId]) => {
+      if (!shiftId || ["off","vacation","sick"].includes(shiftId)) return;
+      const disp = getShiftDisplay(shiftId);
+      if (disp && disp.hours > 0) worked += disp.hours;
+    });
+    hoursWorked[s.id] = worked;
+  });
   const lockDateObj  = lockDate ? new Date(lockDate) : null;
   const totalDays    = getDaysInYear(year);
   const startOfYear  = new Date(year, 0, 1);
@@ -429,26 +436,39 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const isoWeek  = getISOWeek(d);
     const dayIdx   = dayOfYear;
 
-    // Reset weekcounter elke nieuwe week (maandag)
+    // Reset weekcounter elke nieuwe week: tel locked shifts van deze week mee
     if (isoWeek !== currentWeek) {
       currentWeek = isoWeek;
-      all.forEach(s => { daysWorkedThisWeek[s.id] = 0; });
+      all.forEach(s => {
+        // Tel hoeveel locked/bestaande werkdagen al in deze week zitten
+        let alWerkend = 0;
+        for (let wi = 0; wi < 7; wi++) {
+          const wd = new Date(d);
+          wd.setDate(d.getDate() - d.getDay() + 1 + wi); // ma t/m zo van deze week
+          if (wd >= d) break; // alleen dagen vóór vandaag
+          const wds = toDS(wd);
+          const wsh = (schedule[s.id] || {})[wds];
+          if (wsh && !["off","vacation","sick"].includes(wsh)) alWerkend++;
+        }
+        daysWorkedThisWeek[s.id] = alWerkend;
+      });
     }
 
     if (lockDateObj && d <= lockDateObj) continue;
 
     const demand = getDayDemand(ds, settings, holidays, vacations);
 
-    // Wie is al gelockt/handmatig ingepland?
+   // Wie is al gelockt/handmatig ingepland?
     const assigned = new Set();
     all.forEach(s => {
       const existing = (schedule[s.id] || {})[ds];
       if (locks[lockKey(s.id, ds)] || existing === "vacation" || existing === "sick") {
         assigned.add(s.id);
+        // Geen hoursWorked++ hier: al verrekend bij initialisatie
+        // Wel stats bijwerken voor deze dag
         if (existing && !["off","vacation","sick"].includes(existing)) {
           const disp = getShiftDisplay(existing);
-          if (disp.hours > 0) {
-            hoursWorked[s.id]      += disp.hours;
+          if (disp && disp.hours > 0) {
             stats[s.id].totalHours += disp.hours;
             daysWorkedThisWeek[s.id]++;
             if (disp.startHour >= 21) { stats[s.id].consecutiveNights++; stats[s.id].nightShifts++; }
@@ -483,31 +503,21 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       dagCount++;
     }
 
-    // ── FASE 2: Extra medewerkers inplannen op basis van uren-target ─────────
+   // ── FASE 2: Extra medewerkers inplannen op basis van uren-target ─────────
     const daysLeft = totalDays - dayOfYear;
     const extras   = sortByNeed(available.filter(s => !assigned.has(s.id) && !s.isFlexijob));
 
     for (const s of extras) {
       const target    = getTargetHours(s);
       const remaining = target - hoursWorked[s.id];
-      const avgH      = avgShiftHours(s);
+      if (remaining <= avgShiftHours(s) * 0.5) continue; // target nagenoeg gehaald
 
-      // Hoeveel werkdagen resten nog voor deze persoon?
-      const daysWorkedSoFar = Object.values(schedule[s.id] || {})
-        .filter(sh => sh && !["off","vacation","sick"].includes(sh)).length;
-      const targetDays  = getTargetDays(s);
-      const daysNeeded  = targetDays - daysWorkedSoFar;
+      // Uren-tempo: hoeveel uur per dag moeten we nog presteren?
+      // Als remaining/daysLeft > gemiddelde shiftduur * 0.4 → vandaag werken
+      const urenPerDagNodig = remaining / Math.max(daysLeft, 1);
+      if (urenPerDagNodig < avgShiftHours(s) * 0.4) continue;
 
-      // Moet hij vandaag werken? Ja als:
-      // - hij nog meer dan 0 dagen nodig heeft
-      // - zijn tempo te laag is (daysNeeded / daysLeft > 0.4 = meer dan 40% van resterende dagen nodig)
-      const tempo = daysNeeded / Math.max(daysLeft, 1);
-
-      if (remaining <= 0) continue;           // target al gehaald
-      if (tempo < 0.35) continue;             // nog genoeg marge, niet nodig vandaag
-      if (daysNeeded <= 0) continue;          // alle werkdagen al gepland
-
-      // Balanceer dag/avond
+      // Balanceer dag/avond bezetting
       const avondBezet = [...assigned].filter(id => {
         const sh = (schedule[id] || {})[ds];
         const disp = getShiftDisplay(sh || "off");
