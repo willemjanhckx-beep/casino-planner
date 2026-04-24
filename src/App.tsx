@@ -328,6 +328,25 @@ function getShiftDisplay(shiftId: string): AssignedShift {
   return { id:"off", label:"Vrij", time:"", startHour:0, endHour:0, hours:0, color:"#374151", bg:"#111827" };
 }
 
+// Bereken hoeveel mensen per dag nodig zijn zodat iedereen zijn target haalt
+  // Formule: teamGrootte × (target/jaar / weken / gemShift) / 7 dagen
+  const vastTeam      = vast.length;
+  const gemTarget     = vast.reduce((s,p) => s + getTarget(p), 0) / Math.max(vastTeam, 1);
+  const gemShiftUren  = 7.5;
+  const ideaalPerDag  = Math.ceil(vastTeam * (gemTarget / 52 / gemShiftUren) / 7);
+
+  // Gebruik dit als ondergrens voor demand als ingesteld minimum te laag is
+  function getEffectiveDemand(rawDemand) {
+    const ingesteldTotaal = rawDemand.morning + rawDemand.evening;
+    if (ingesteldTotaal >= ideaalPerDag) return rawDemand;
+    // Schaal proportioneel op
+    const factor = ideaalPerDag / ingesteldTotaal;
+    return {
+      morning: Math.round(rawDemand.morning * factor),
+      evening: Math.round(rawDemand.evening * factor),
+    };
+  }
+
 function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
   const autoStaff = staff.filter(s => s.autoSchedule !== false);
   const vast      = autoStaff.filter(s => !s.isFlexijob);
@@ -436,15 +455,16 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const daysLeft = totalDays - dayIdx;
     const dow     = (d.getDay() + 6) % 7; // 0=ma
 
-    // Reset weekcap elke maandag — simpel naar 0, geen terugtellogica
-    if (isoWeek !== currentWeek) {
-      currentWeek = isoWeek;
-      all.forEach(s => { dtw[s.id] = 0; });
-    }
+    // Roterende weekstart: elke persoon heeft eigen "weekstart-dag"
+    // zodat za/zo niet leeg blijven omdat iedereen zijn cap al vol heeft
+    all.forEach(s => {
+      const weekStartDow = s.id % 7; // 0=ma t/m 6=zo, roteert per persoon
+      if (dow === weekStartDow) dtw[s.id] = 0;
+    });
 
     if (lockDateObj && d <= lockDateObj) continue;
 
-    const demand = getDayDemand(ds, settings, holidays, vacations);
+    const demand = getEffectiveDemand(getDayDemand(ds, settings, holidays, vacations));
 
     // Wie is al locked/vacation/sick voor vandaag?
     const assigned = new Set();
