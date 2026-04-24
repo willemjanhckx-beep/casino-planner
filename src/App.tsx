@@ -328,24 +328,7 @@ function getShiftDisplay(shiftId: string): AssignedShift {
   return { id:"off", label:"Vrij", time:"", startHour:0, endHour:0, hours:0, color:"#374151", bg:"#111827" };
 }
 
-// Bereken hoeveel mensen per dag nodig zijn zodat iedereen zijn target haalt
-  // Formule: teamGrootte × (target/jaar / weken / gemShift) / 7 dagen
-  const vastTeam      = vast.length;
-  const gemTarget     = vast.reduce((s,p) => s + getTarget(p), 0) / Math.max(vastTeam, 1);
-  const gemShiftUren  = 7.5;
-  const ideaalPerDag  = Math.ceil(vastTeam * (gemTarget / 52 / gemShiftUren) / 7);
 
-  // Gebruik dit als ondergrens voor demand als ingesteld minimum te laag is
-  function getEffectiveDemand(rawDemand) {
-    const ingesteldTotaal = rawDemand.morning + rawDemand.evening;
-    if (ingesteldTotaal >= ideaalPerDag) return rawDemand;
-    // Schaal proportioneel op
-    const factor = ideaalPerDag / ingesteldTotaal;
-    return {
-      morning: Math.round(rawDemand.morning * factor),
-      evening: Math.round(rawDemand.evening * factor),
-    };
-  }
 
 function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
   const autoStaff = staff.filter(s => s.autoSchedule !== false);
@@ -443,6 +426,25 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     if (tpl.start >= 21) { stats[s.id].consecutiveNights++; stats[s.id].nightShifts++; }
     else                   stats[s.id].consecutiveNights = 0;
     if (isWeekend(d)) stats[s.id].weekendShifts++;
+  }
+
+  // Bereken hoeveel mensen per dag nodig zijn zodat iedereen zijn target haalt
+  // Formule: teamGrootte × (target/jaar / weken / gemShift) / 7 dagen
+  const vastTeam      = vast.length;
+  const gemTarget     = vast.reduce((s,p) => s + getTarget(p), 0) / Math.max(vastTeam, 1);
+  const gemShiftUren  = 7.5;
+  const ideaalPerDag  = Math.ceil(vastTeam * (gemTarget / 52 / gemShiftUren) / 7);
+
+  // Gebruik dit als ondergrens voor demand als ingesteld minimum te laag is
+  function getEffectiveDemand(rawDemand) {
+    const ingesteldTotaal = rawDemand.morning + rawDemand.evening;
+    if (ingesteldTotaal >= ideaalPerDag) return rawDemand;
+    // Schaal proportioneel op
+    const factor = ideaalPerDag / ingesteldTotaal;
+    return {
+      morning: Math.round(rawDemand.morning * factor),
+      evening: Math.round(rawDemand.evening * factor),
+    };
   }
 
   // ── Hoofdloop ─────────────────────────────────────────────────────────────
