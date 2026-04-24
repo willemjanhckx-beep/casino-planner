@@ -330,7 +330,6 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   const flexi     = autoStaff.filter(s =>  s.isFlexijob);
   const all       = [...vast, ...flexi];
 
-  // ── Initialisatie ──────────────────────────────────────────────────────────
   const schedule = {};
   const stats    = {};
   all.forEach(s => {
@@ -338,7 +337,7 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     stats[s.id]    = { weekendShifts:0, nightShifts:0, totalHours:0, consecutiveNights:0 };
   });
 
-  // hoursWorked eenmalig optellen uit bestaand schedule
+  // Bestaande uren eenmalig optellen
   const hoursWorked = {};
   all.forEach(s => {
     let h = 0;
@@ -355,20 +354,11 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   const dagPool     = SHIFT_POOLS.filter(p => p.start < 17);
   const avondPool   = SHIFT_POOLS.filter(p => p.start >= 17);
 
-  // ── Hulpfuncties ───────────────────────────────────────────────────────────
-
   function getCap(s) {
     if (s.isFlexijob) return 6;
     if (s.fte >= 1.0) return 5;
     if (s.fte >= 0.8) return 4;
     return 3;
-  }
-
-  function getMinDays(s) {
-    if (s.isFlexijob) return 0;
-    if (s.fte >= 1.0) return 4;
-    if (s.fte >= 0.8) return 3;
-    return 2;
   }
 
   function getTarget(s) {
@@ -377,33 +367,23 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     return Math.round(nettoDagen * (38 / 5));
   }
 
-  // Persoonlijke werkdagen: elke persoon heeft 2 vaste vrije dagen per week
-  // die rouleren zodat elk dag van de week gedekt is
-  // Persoon met index i: vrije dag 1 = (i*2) % 7, vrije dag 2 = (i*2+1) % 7
-  function getPersonalOffDays(s, staffIndex) {
-    const off1 = (staffIndex * 2) % 7;      // 0=ma t/m 6=zo
-    const off2 = (staffIndex * 2 + 1) % 7;
-    return [off1, off2];
+  // Roterende weekstart per persoon zodat za/zo niet leeg zijn
+  // Persoon 0 start op ma, persoon 1 op di, etc.
+  function getWeekStart(s) {
+    const idx = all.findIndex(x => x.id === s.id);
+    return idx % 7; // 0=ma t/m 6=zo
   }
 
-  // Bouw index op voor snelle lookup
-  const staffIndex = {};
-  all.forEach((s, i) => { staffIndex[s.id] = i; });
+  // daysWorkedThisWeek: teller per persoon, reset op persoonlijke weekstart
+  const dww = {};
+  all.forEach(s => { dww[s.id] = 0; });
 
-  function isPersonalWorkDay(s, dow) {
-    if (s.isFlexijob) return true;
-    const offDays = getPersonalOffDays(s, staffIndex[s.id]);
-    return !offDays.includes(dow);
-  }
-
-  function canWork(s, ds, d, isoWeek, daysWorkedThisWeek) {
+  function canWork(s, ds, d, isoWeek) {
     if (!isAvailOnDate(s, ds, isoWeek)) return false;
     if (locks[lockKey(s.id, ds)]) return false;
     if (stats[s.id].consecutiveNights >= (settings.maxConsecNights || 4)) return false;
     if (!s.isFlexijob && hoursWorked[s.id] >= getTarget(s) * 1.04) return false;
-    // Weekcap: max 5 dagen (of 4/3 voor deeltijds)
-    if ((daysWorkedThisWeek[s.id] || 0) >= getCap(s)) return false;
-    // Rusttijd
+    if (dww[s.id] >= getCap(s)) return false;
     const prev = new Date(d);
     prev.setDate(prev.getDate() - 1);
     const prevDs    = toDS(prev);
@@ -414,33 +394,30 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     return true;
   }
 
-  function assign(s, ds, d, dayIdx, pool, daysWorkedThisWeek) {
+  function assign(s, ds, d, dayIdx, pool) {
     const tpl = pool[(s.id * 7 + dayIdx * 3) % pool.length];
     const dur = Math.min(8.5, Math.max(6,
       ((s.id + dayIdx) % 3 === 0) ? tpl.duration + 0.5 : tpl.duration
     ));
-    schedule[s.id][ds]     = makeShiftId(tpl.start, dur);
-    hoursWorked[s.id]     += dur;
+    schedule[s.id][ds]      = makeShiftId(tpl.start, dur);
+    hoursWorked[s.id]      += dur;
     stats[s.id].totalHours += dur;
-    daysWorkedThisWeek[s.id] = (daysWorkedThisWeek[s.id] || 0) + 1;
+    dww[s.id]++;
     if (tpl.start >= 21) { stats[s.id].consecutiveNights++; stats[s.id].nightShifts++; }
     else                   stats[s.id].consecutiveNights = 0;
     if (isWeekend(d)) stats[s.id].weekendShifts++;
   }
 
-  // Sorteer: meeste relatieve uren-achterstand eerst
+  // Sorteer op:
+  // 1. Minste dagen gewerkt deze week (spreiding over weekdagen)
+  // 2. Daarna: minste jaaruren (evenredige verdeling)
   function byNeed(arr) {
-    return [...arr].sort((a, b) =>
-      (hoursWorked[a.id] / Math.max(getTarget(a), 1)) -
-      (hoursWorked[b.id] / Math.max(getTarget(b), 1))
-    );
+    return [...arr].sort((a, b) => {
+      if (dww[a.id] !== dww[b.id]) return dww[a.id] - dww[b.id];
+      return (hoursWorked[a.id] / Math.max(getTarget(a), 1)) -
+             (hoursWorked[b.id] / Math.max(getTarget(b), 1));
+    });
   }
-
-  // ── Hoofdloop ──────────────────────────────────────────────────────────────
-  // daysWorkedThisWeek reset op persoonlijke weekstart (roteert per persoon)
-  const daysWorkedThisWeek = {};
-  all.forEach(s => { daysWorkedThisWeek[s.id] = 0; });
-  const weekStarted = {};  // bijhouden of week al gereset werd
 
   for (let d = new Date(year, 0, 1); d <= new Date(year, 11, 31); d.setDate(d.getDate() + 1)) {
     const ds      = toDS(d);
@@ -449,75 +426,64 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const dow     = (d.getDay() + 6) % 7; // 0=ma, 6=zo
     const daysLeft = totalDays - dayIdx;
 
-    // Reset weekcap: elke maandag voor iedereen
-    if (dow === 0) {
-      all.forEach(s => { daysWorkedThisWeek[s.id] = 0; });
-    }
+    // Roterende weekstart reset
+    all.forEach(s => { if (dow === getWeekStart(s)) dww[s.id] = 0; });
 
     if (lockDateObj && d <= lockDateObj) continue;
 
     const demand = getDayDemand(ds, settings, holidays, vacations);
 
-    // Wie is al locked/vacation/sick?
+    // Locked/vacation/sick
     const assigned = new Set();
     all.forEach(s => {
       const ex = (schedule[s.id] || {})[ds];
       if (locks[lockKey(s.id, ds)] || ex === "vacation" || ex === "sick") {
         assigned.add(s.id);
         if (ex && !["off","vacation","sick"].includes(ex)) {
-          daysWorkedThisWeek[s.id] = Math.min(
-            (daysWorkedThisWeek[s.id] || 0) + 1, getCap(s)
-          );
+          dww[s.id] = Math.min(dww[s.id] + 1, getCap(s));
         }
       }
     });
 
-    // Kandidaten die vandaag kunnen werken
-    const kandidaten = all.filter(s =>
-      !assigned.has(s.id) && canWork(s, ds, d, isoWeek, daysWorkedThisWeek)
-    );
+    const kandidaten = all.filter(s => !assigned.has(s.id) && canWork(s, ds, d, isoWeek));
+    const sorted = byNeed(kandidaten);
 
-    // Splits in "wil werken vandaag" (eigen werkdag) en "kan helpen" (vrije dag)
-    const werkdag  = kandidaten.filter(s => isPersonalWorkDay(s, dow));
-    const vrijdag  = kandidaten.filter(s => !isPersonalWorkDay(s, dow));
-
-    // ── FASE 1: Minimum avond ─────────────────────────────────────────────
-    // Gebruik eerst eigen werkdag-mensen, dan vrije-dag-mensen als aanvulling
+    // ── FASE 1: Avond minimum ──────────────────────────────────────────────
     let avondCount = 0;
-    for (const s of byNeed([...werkdag, ...vrijdag])) {
+    for (const s of sorted) {
       if (avondCount >= demand.evening) break;
       if (assigned.has(s.id)) continue;
-      assign(s, ds, d, dayIdx, avondPool, daysWorkedThisWeek);
+      assign(s, ds, d, dayIdx, avondPool);
       assigned.add(s.id);
       avondCount++;
     }
 
-    // ── FASE 1B: Minimum dag ──────────────────────────────────────────────
+    // ── FASE 1B: Dag minimum ───────────────────────────────────────────────
     let dagCount = 0;
-    for (const s of byNeed([...werkdag, ...vrijdag].filter(s => !assigned.has(s.id)))) {
+    for (const s of byNeed(kandidaten.filter(s => !assigned.has(s.id)))) {
       if (dagCount >= demand.morning) break;
-      assign(s, ds, d, dayIdx, dagPool, daysWorkedThisWeek);
+      assign(s, ds, d, dayIdx, dagPool);
       assigned.add(s.id);
       dagCount++;
     }
 
-    // ── FASE 2: Eigen werkdag-mensen die nog niet ingepland zijn ──────────
-    // Iedereen voor wie vandaag een werkdag is EN die nog uren nodig heeft
-    for (const s of byNeed(werkdag.filter(s => !assigned.has(s.id) && !s.isFlexijob))) {
+    // ── FASE 2: Resterende mensen met uren-tekort ──────────────────────────
+    for (const s of byNeed(kandidaten.filter(s => !assigned.has(s.id) && !s.isFlexijob))) {
       const rem = getTarget(s) - hoursWorked[s.id];
       if (rem <= 0) continue;
-      // Balanceer dag/avond
+      // Inplannen als meer dan 1 shift/week gemiddeld nog nodig
+      if (rem / Math.max(daysLeft, 1) < 7.5 / 7) continue;
       let av = 0, dg = 0;
       assigned.forEach(id => {
         const sh = (schedule[id] || {})[ds];
         const dp = getShiftDisplay(sh || "off");
         if (dp.hours > 0) { if (dp.startHour >= 17) av++; else dg++; }
       });
-      assign(s, ds, d, dayIdx, av <= dg ? avondPool : dagPool, daysWorkedThisWeek);
+      assign(s, ds, d, dayIdx, av <= dg ? avondPool : dagPool);
       assigned.add(s.id);
     }
 
-    // ── Niet-ingeplanden → vrij ───────────────────────────────────────────
+    // ── Niet-ingeplanden → vrij ────────────────────────────────────────────
     all.forEach(s => {
       if (assigned.has(s.id)) return;
       const ex = (schedule[s.id] || {})[ds];
@@ -527,7 +493,6 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     });
   }
 
-  // ── Stats ──────────────────────────────────────────────────────────────────
   all.forEach(s => {
     const target  = getTarget(s);
     const planned = hoursWorked[s.id];
