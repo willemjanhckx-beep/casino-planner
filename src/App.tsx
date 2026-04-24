@@ -349,29 +349,23 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   const dagPool     = SHIFT_POOLS.filter(p => p.start < 17);
   const avondPool   = SHIFT_POOLS.filter(p => p.start >= 17);
 
-  function getCap(s) {
-    if (s.isFlexijob) return 6;
-    if (s.fte >= 1.0) return 5;
-    if (s.fte >= 0.8) return 4;
-    return 3;
-  }
+function getCap(s) {
+if (s.isFlexijob) return 6;
+if (s.fte >= 1.0) return 5;
+if (s.fte >= 0.8) return 4;
+return 3; // 50% = 2.5 → afgerond 3 voor spreiding
+}
 
-  function getTarget(s) {
-    if (s.isFlexijob) return 9999;
-    const nettoDagen = s.fte * 260 - (s.vacationDays || 0);
-    return Math.round(nettoDagen * (38 / 5));
-  }
+function getTarget(s) {
+if (s.isFlexijob) return 9999;
+const AVG_SHIFT_HOURS = 7.25; // realistisch gemiddelde voor SHIFT_POOLS (6–8.5u)
+const nettoDagen = s.fte * 260 - (s.vacationDays || 0);
+return Math.round(nettoDagen * AVG_SHIFT_HOURS);
+}
 
   // Roterende weekstart per persoon zodat za/zo niet leeg zijn
   // Persoon 0 start op ma, persoon 1 op di, etc.
-  function getWeekStart(s) {
-    const idx = all.findIndex(x => x.id === s.id);
-    return idx % 7; // 0=ma t/m 6=zo
-  }
-
-  // daysWorkedThisWeek: teller per persoon, reset op persoonlijke weekstart
-  const dww = {};
-  all.forEach(s => { dww[s.id] = 0; });
+  if (dow === 0) { all.forEach(s => { dww[s.id] = 0; }); }
 
   function canWork(s, ds, d, isoWeek) {
     if (!isAvailOnDate(s, ds, isoWeek)) return false;
@@ -406,68 +400,275 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   // Sorteer op:
   // 1. Minste dagen gewerkt deze week (spreiding over weekdagen)
   // 2. Daarna: minste jaaruren (evenredige verdeling)
-  function byNeed(arr) {
-    return [...arr].sort((a, b) => {
-      if (dww[a.id] !== dww[b.id]) return dww[a.id] - dww[b.id];
-      return (hoursWorked[a.id] / Math.max(getTarget(a), 1)) -
-             (hoursWorked[b.id] / Math.max(getTarget(b), 1));
-    });
+function byNeed(arr, hoursWorked, getTarget, dww, dayIdx) {
+return […arr].sort((a, b) => {
+// Primair: minste shifts deze week (zorgt voor basisverspreiding)
+if (dww[a.id] !== dww[b.id]) return dww[a.id] - dww[b.id];
+// Secundair: relatief uren-tekort (jaarbalans)
+const ratioA = hoursWorked[a.id] / Math.max(getTarget(a), 1);
+const ratioB = hoursWorked[b.id] / Math.max(getTarget(b), 1);
+if (Math.abs(ratioA - ratioB) > 0.01) return ratioA - ratioB;
+// Tertiair: roterende dagindex-gebaseerde prioriteit → voorkomt systematische bias
+return ((a.id + dayIdx) % 13) - ((b.id + dayIdx) % 13);
+});
+}
+
+// ─── DEBUG LOGGER ──────────────────────────────────────────────────────────────
+function makeDebugLog() {
+const log = [];
+return {
+add: (msg) => log.push(msg),
+dump: () => log,
+summary: (staff, hoursWorked, getTarget, schedule, year) => {
+return staff.map(s => {
+const target = getTarget(s);
+const planned = hoursWorked[s.id] || 0;
+const diff = planned - target;
+const shiftsPlanned = Object.values(schedule[s.id] || {})
+.filter(sh => sh && ![“off”,“vacation”,“sick”].includes(sh) && sh.startsWith(“shift_”))
+.length;
+const offDays = Object.values(schedule[s.id] || {})
+.filter(sh => !sh || sh === “off”).length;
+return {
+id: s.id,
+name: s.name,
+fte: s.fte,
+target: Math.round(target),
+planned: Math.round(planned),
+diff: Math.round(diff),
+pct: target > 0 ? Math.round((planned / target) * 100) : 0,
+shiftsPlanned,
+offDays,
+status: Math.abs(diff / Math.max(target, 1)) <= 0.05 ? “✅ OK”
+: diff < 0 ? “🔴 ONDER”
+: “🟡 BOVEN”
+};
+});
+}
+};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HOOFDFUNCTIE
+// ═══════════════════════════════════════════════════════════════════════════════
+function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
+const debug = makeDebugLog();
+
+const autoStaff = staff.filter(s => s.autoSchedule !== false);
+const vast      = autoStaff.filter(s => !s.isFlexijob);
+const flexi     = autoStaff.filter(s =>  s.isFlexijob);
+const all       = […vast, …flexi];
+
+debug.add(`[INIT] ${all.length} medewerkers te plannen (${vast.length} vast, ${flexi.length} flexi)`);
+debug.add(`[INIT] Jaar: ${year}, Instellingen: ${JSON.stringify(settings)}`);
+
+const schedule = {};
+const stats    = {};
+all.forEach(s => {
+schedule[s.id] = { …(existingSchedule[s.id] || {}) };
+stats[s.id]    = { weekendShifts: 0, nightShifts: 0, totalHours: 0, consecutiveNights: 0 };
+});
+
+// Bestaande uren eenmalig tellen
+const hoursWorked = {};
+all.forEach(s => {
+let h = 0;
+Object.entries(schedule[s.id]).forEach(([ds, sid]) => {
+if (!sid || [“off”,“vacation”,“sick”].includes(sid)) return;
+const d = getShiftDisplay(sid);
+if (d && d.hours > 0) h += d.hours;
+});
+hoursWorked[s.id] = h;
+});
+
+all.forEach(s => {
+debug.add(`[TARGET] ${s.name}: target=${Math.round(getTarget(s))}u, bestaand=${Math.round(hoursWorked[s.id])}u`);
+});
+
+const lockDateObj = lockDate ? new Date(lockDate) : null;
+const totalDays   = getDaysInYear(year);
+const dagPool     = SHIFT_POOLS.filter(p => p.start < 17);
+const avondPool   = SHIFT_POOLS.filter(p => p.start >= 17);
+
+// ─── FIX 2: Echte ISO-weekgrens (maandag = dag 0 = reset) ─────────────────
+// Origineel: roterende weekstart per persoon → teller loopt uit de pas
+// Fix: iedereen reset op maandag (dow === 0), zoals de echte werkweek
+const dww = {};
+all.forEach(s => { dww[s.id] = 0; });
+
+// ─── HULPFUNCTIES (intern scope) ───────────────────────────────────────────
+function _canWork(s, ds, d, isoWeek) {
+if (!isAvailOnDate(s, ds, isoWeek)) {
+return { ok: false, reason: “niet beschikbaar op deze dag” };
+}
+if (locks[lockKey(s.id, ds)]) {
+return { ok: false, reason: “cel gelockt” };
+}
+if (stats[s.id].consecutiveNights >= (settings.maxConsecNights || 4)) {
+return { ok: false, reason: `max opeenvolgende nachten bereikt (${settings.maxConsecNights})` };
+}
+// FIX: gebruik 1.05 bovengrens maar check tegen gecorrigeerde target
+if (!s.isFlexijob && hoursWorked[s.id] >= getTarget(s) * 1.05) {
+return { ok: false, reason: `uren-target bereikt (${Math.round(hoursWorked[s.id])}/${Math.round(getTarget(s))}u)` };
+}
+if (dww[s.id] >= getCap(s)) {
+return { ok: false, reason: `weekcap bereikt (${dww[s.id]}/${getCap(s)})` };
+}
+const prev = new Date(d);
+prev.setDate(prev.getDate() - 1);
+const prevDs    = toDS(prev);
+const prevShift = (schedule[s.id] || {})[prevDs];
+if (prevShift && ![“off”,“vacation”,“sick”].includes(prevShift)) {
+if (!hasEnoughRest(prevDs, prevShift, ds, settings.minRestHours || 11)) {
+return { ok: false, reason: `onvoldoende rust (min ${settings.minRestHours}u)` };
+}
+}
+return { ok: true, reason: null };
+}
+
+function canWork(s, ds, d, isoWeek) {
+return _canWork(s, ds, d, isoWeek).ok;
+}
+
+function assign(s, ds, d, dayIdx, pool) {
+const tpl = pool[(s.id * 7 + dayIdx * 3) % pool.length];
+const dur = Math.min(8.5, Math.max(6,
+((s.id + dayIdx) % 3 === 0) ? tpl.duration + 0.5 : tpl.duration
+));
+schedule[s.id][ds]      = makeShiftId(tpl.start, dur);
+hoursWorked[s.id]      += dur;
+stats[s.id].totalHours += dur;
+dww[s.id]++;
+if (tpl.start >= 21) {
+stats[s.id].consecutiveNights++;
+stats[s.id].nightShifts++;
+} else {
+stats[s.id].consecutiveNights = 0;
+}
+if (isWeekend(d)) stats[s.id].weekendShifts++;
+}
+
+// ─── HOOFDLUS ──────────────────────────────────────────────────────────────
+let dagTeller = 0;
+const underplanningLog = {}; // per persoon bijhouden waarom ze niet ingepland werden
+all.forEach(s => { underplanningLog[s.id] = {}; });
+
+for (let d = new Date(year, 0, 1); d <= new Date(year, 11, 31); d.setDate(d.getDate() + 1)) {
+const ds      = toDS(d);
+const dayIdx  = getDayIndex(d, year);
+const isoWeek = getISOWeek(d);
+const dow     = (d.getDay() + 6) % 7; // 0=ma … 6=zo
+const daysLeft = totalDays - dayIdx;
+dagTeller++;
+
+```
+// ─── FIX 2: Reset weekcap op maandag voor iedereen ────────────────────
+if (dow === 0) {
+  all.forEach(s => { dww[s.id] = 0; });
+}
+
+if (lockDateObj && d <= lockDateObj) continue;
+
+const demand = getDayDemand(ds, settings, holidays, vacations);
+
+// Locked/vacation/sick personen markeren als assigned
+const assigned = new Set();
+all.forEach(s => {
+  const ex = (schedule[s.id] || {})[ds];
+  if (locks[lockKey(s.id, ds)] || ex === "vacation" || ex === "sick") {
+    assigned.add(s.id);
+    if (ex && !["off","vacation","sick"].includes(ex)) {
+      dww[s.id] = Math.min(dww[s.id] + 1, getCap(s));
+    }
+  }
+});
+
+// Bepaal kandidaten + log waarom iemand niet beschikbaar is
+const kandidaten = [];
+all.forEach(s => {
+  if (assigned.has(s.id)) return;
+  const check = _canWork(s, ds, d, isoWeek);
+  if (check.ok) {
+    kandidaten.push(s);
+  } else {
+    // Log de reden (voor debug, telt per dag)
+    underplanningLog[s.id][ds] = check.reason;
+  }
+});
+
+const sorted = () => byNeed(kandidaten.filter(s => !assigned.has(s.id)), hoursWorked, getTarget, dww, dayIdx);
+
+// ── FASE 1A: Avond minimum ────────────────────────────────────────────
+let avondCount = 0;
+for (const s of sorted()) {
+  if (avondCount >= demand.evening) break;
+  assign(s, ds, d, dayIdx, avondPool);
+  assigned.add(s.id);
+  avondCount++;
+}
+
+// ── FASE 1B: Dag minimum ──────────────────────────────────────────────
+let dagCount = 0;
+for (const s of sorted()) {
+  if (dagCount >= demand.morning) break;
+  assign(s, ds, d, dayIdx, dagPool);
+  assigned.add(s.id);
+  dagCount++;
+}
+
+// ── FASE 2: Medewerkers met uren-tekort (HERSCHREVEN) ─────────────────
+// Origineel: if (rem / daysLeft < 7.5/7) continue  → bijna altijd false
+// Fix: plan iemand in als ze >5% onder hun pro-rata target zitten
+for (const s of byNeed(
+  kandidaten.filter(s => !assigned.has(s.id) && !s.isFlexijob),
+  hoursWorked, getTarget, dww, dayIdx
+)) {
+  const target  = getTarget(s);
+  // Pro-rata: hoeveel uur zou je op dit moment verwacht hebben?
+  const dayRatio     = dayIdx / Math.max(totalDays, 1);
+  const proRataTarget = target * dayRatio;
+  const achterstand   = proRataTarget - hoursWorked[s.id];
+  
+  // Plan in als: meer dan 1 shift achter op pro-rata schema
+  // OF als er nog meer dan 20% van het jaar over is én ze >3% achterliggen
+  const shiftAchter = achterstand / 7.25; // hoeveel shifts achter
+  const yearRemPct  = daysLeft / totalDays;
+  
+  if (shiftAchter < 1.0 && !(yearRemPct > 0.2 && achterstand / Math.max(target, 1) > 0.03)) {
+    underplanningLog[s.id][ds] = `fase2: pro-rata OK (${Math.round(achterstand)}u achter, ${shiftAchter.toFixed(1)} shifts)`;
+    continue;
   }
 
-  for (let d = new Date(year, 0, 1); d <= new Date(year, 11, 31); d.setDate(d.getDate() + 1)) {
-    const ds      = toDS(d);
-    const dayIdx  = getDayIndex(d, year);
-    const isoWeek = getISOWeek(d);
-    const dow     = (d.getDay() + 6) % 7; // 0=ma, 6=zo
-    const daysLeft = totalDays - dayIdx;
+  // Balanceer avond/dag
+  let av = 0, dg = 0;
+  assigned.forEach(id => {
+    const sh = (schedule[id] || {})[ds];
+    const dp = getShiftDisplay(sh || "off");
+    if (dp.hours > 0) { if (dp.startHour >= 17) av++; else dg++; }
+  });
+  assign(s, ds, d, dayIdx, av <= dg ? avondPool : dagPool);
+  assigned.add(s.id);
+}
 
-    // Roterende weekstart reset
-    all.forEach(s => { if (dow === getWeekStart(s)) dww[s.id] = 0; });
-
-    if (lockDateObj && d <= lockDateObj) continue;
-
-    const demand = getDayDemand(ds, settings, holidays, vacations);
-
-    // Locked/vacation/sick
-    const assigned = new Set();
-    all.forEach(s => {
+// ── FASE 3 (NIEUW): Agressieve verdeling als capaciteit aanwezig ──────
+// Als bezetting al gehaald is, plannen we extra mensen in die ver achterliggen
+// op hun jaaruren. Dit zorgt voor de 4–5 dagen/week doelstelling.
+const totalRequired = demand.morning + demand.evening;
+if (assigned.size - all.filter(s => {
       const ex = (schedule[s.id] || {})[ds];
-      if (locks[lockKey(s.id, ds)] || ex === "vacation" || ex === "sick") {
-        assigned.add(s.id);
-        if (ex && !["off","vacation","sick"].includes(ex)) {
-          dww[s.id] = Math.min(dww[s.id] + 1, getCap(s));
-        }
-      }
-    });
-
-    const kandidaten = all.filter(s => !assigned.has(s.id) && canWork(s, ds, d, isoWeek));
-    const sorted = byNeed(kandidaten);
-
-    // ── FASE 1: Avond minimum ──────────────────────────────────────────────
-    let avondCount = 0;
-    for (const s of sorted) {
-      if (avondCount >= demand.evening) break;
-      if (assigned.has(s.id)) continue;
-      assign(s, ds, d, dayIdx, avondPool);
-      assigned.add(s.id);
-      avondCount++;
-    }
-
-    // ── FASE 1B: Dag minimum ───────────────────────────────────────────────
-    let dagCount = 0;
-    for (const s of byNeed(kandidaten.filter(s => !assigned.has(s.id)))) {
-      if (dagCount >= demand.morning) break;
-      assign(s, ds, d, dayIdx, dagPool);
-      assigned.add(s.id);
-      dagCount++;
-    }
-
-    // ── FASE 2: Resterende mensen met uren-tekort ──────────────────────────
-    for (const s of byNeed(kandidaten.filter(s => !assigned.has(s.id) && !s.isFlexijob))) {
-      const rem = getTarget(s) - hoursWorked[s.id];
-      if (rem <= 0) continue;
-      // Inplannen als meer dan 1 shift/week gemiddeld nog nodig
-      if (rem / Math.max(daysLeft, 1) < 7.5 / 7) continue;
+      return ex === "vacation" || ex === "sick";
+    }).length >= totalRequired) {
+  
+  for (const s of byNeed(
+    kandidaten.filter(s => !assigned.has(s.id) && !s.isFlexijob),
+    hoursWorked, getTarget, dww, dayIdx
+  )) {
+    const target = getTarget(s);
+    const ratio  = hoursWorked[s.id] / Math.max(target, 1);
+    
+    // Plan altijd in als iemand meer dan 8% onder target zit
+    // én nog minder dan 4 shifts deze week heeft gedraaid
+    if (ratio < 0.92 && dww[s.id] < getCap(s) - 1) {
       let av = 0, dg = 0;
       assigned.forEach(id => {
         const sh = (schedule[id] || {})[ds];
@@ -476,30 +677,75 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       });
       assign(s, ds, d, dayIdx, av <= dg ? avondPool : dagPool);
       assigned.add(s.id);
+    } else if (ratio >= 0.92) {
+      underplanningLog[s.id][ds] = `fase3 skip: ratio ${(ratio*100).toFixed(1)}% (≥92%)`;
     }
-
-    // ── Niet-ingeplanden → vrij ────────────────────────────────────────────
-    all.forEach(s => {
-      if (assigned.has(s.id)) return;
-      const ex = (schedule[s.id] || {})[ds];
-      if (ex === "vacation" || ex === "sick") return;
-      schedule[s.id][ds]            = "off";
-      stats[s.id].consecutiveNights = 0;
-    });
   }
-
-  all.forEach(s => {
-    const target  = getTarget(s);
-    const planned = hoursWorked[s.id];
-    const diff    = planned - target;
-    stats[s.id].targetHours     = Math.round(target);
-    stats[s.id].plannedHours    = Math.round(planned);
-    stats[s.id].hoursDiff       = Math.round(diff);
-    stats[s.id].withinTolerance = Math.abs(diff / Math.max(target, 1)) <= 0.05;
-  });
-
-  return { schedule, stats };
 }
+
+// ── Niet-ingeplanden → vrij ───────────────────────────────────────────
+all.forEach(s => {
+  if (assigned.has(s.id)) return;
+  const ex = (schedule[s.id] || {})[ds];
+  if (ex === "vacation" || ex === "sick") return;
+  schedule[s.id][ds]            = "off";
+  stats[s.id].consecutiveNights = 0;
+});
+```
+
+}
+
+// ─── EINDSTATISTIEKEN + DEBUG RAPPORT ──────────────────────────────────────
+all.forEach(s => {
+const target  = getTarget(s);
+const planned = hoursWorked[s.id];
+const diff    = planned - target;
+stats[s.id].targetHours     = Math.round(target);
+stats[s.id].plannedHours    = Math.round(planned);
+stats[s.id].hoursDiff       = Math.round(diff);
+stats[s.id].withinTolerance = Math.abs(diff / Math.max(target, 1)) <= 0.05;
+});
+
+// Debug: samenvatting per medewerker
+const debugSummary = debug.summary(all, hoursWorked, getTarget, schedule, year);
+debugSummary.forEach(row => {
+debug.add(`[RESULT] ${row.name}: ${row.planned}/${row.target}u (${row.pct}%) | ${row.shiftsPlanned} shifts | ${row.status}`);
+
+```
+// Toon top-5 redenen van niet-inplannen
+const reasons = underplanningLog[row.id];
+const reasonCounts = {};
+Object.values(reasons).forEach(r => {
+  reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+});
+const topReasons = Object.entries(reasonCounts)
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 5);
+if (topReasons.length > 0) {
+  debug.add(`  ↳ Top redenen vrij: ${topReasons.map(([r,c]) => `"${r}" (${c}x)`).join(', ')}`);
+}
+```
+
+});
+
+// Log naar console (altijd zichtbaar in browser DevTools)
+console.group(“🎰 Plannings-debug rapport”);
+console.table(debugSummary);
+console.groupCollapsed(“📋 Gedetailleerde log”);
+debug.dump().forEach(line => console.log(line));
+console.groupEnd();
+
+// Waarschuwingen voor medewerkers die ver onder target zitten
+const warnings = debugSummary.filter(r => r.pct < 90 && !r.name.startsWith(“Flex”));
+if (warnings.length > 0) {
+console.warn(“⚠️ Medewerkers STERK ondergepland (<90% van target):”);
+console.table(warnings);
+}
+console.groupEnd();
+
+return { schedule, stats, debugLog: debug.dump(), debugSummary };
+}
+
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
