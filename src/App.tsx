@@ -188,11 +188,6 @@ function deriveShiftId(start: number, duration: number): string {
   return makeShiftId(start, duration);
 }
 
-function getTargetHoursGlobal(s) {
-  if (s.isFlexijob) return 9999;
-  const nettoDagen = s.fte * 260 - (s.vacationDays || 0);
-  return Math.round(nettoDagen * (38 / 5));
-}
 
 function getShiftEndAbsolute(ds: string, shiftId: string): number {
   const disp = getShiftDisplay(shiftId);
@@ -1294,8 +1289,8 @@ function StorageView({onExport, onImport, onSaveToSheets, onLoadFromSheets}) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS={
-  minMorning:4,
-  minEvening:8,
+  minMorning:3,
+  minEvening:6,
   minNight:10,
   weekendMinMorning:4,
   weekendMinEvening:8,
