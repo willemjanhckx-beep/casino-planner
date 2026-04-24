@@ -379,8 +379,24 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     return 3;
   }
 
-  function getAvgShift(s) {
+ function getAvgShift(s) {
     return 7.5;
+  }
+
+  // Ideaal aantal mensen/dag zodat iedereen zijn jaaruren haalt
+  // Formule: team × (target/52weken/7.5u) / 7 dagen
+  const vastTeam     = vast.length;
+  const gemTarget    = vast.reduce((sum, p) => sum + getTarget(p), 0) / Math.max(vastTeam, 1);
+  const ideaalPerDag = Math.ceil(vastTeam * (gemTarget / 52 / 7.5) / 7);
+
+  function getEffectiveDemand(rawDemand) {
+    const ingesteld = rawDemand.morning + rawDemand.evening;
+    if (ingesteld >= ideaalPerDag) return rawDemand;
+    const factor = ideaalPerDag / ingesteld;
+    return {
+      morning: Math.round(rawDemand.morning * factor),
+      evening: Math.round(rawDemand.evening * factor),
+    };
   }
 
   function canWork(s, ds, d, isoWeek) {
