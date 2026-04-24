@@ -188,17 +188,11 @@ function deriveShiftId(start: number, duration: number): string {
   return makeShiftId(start, duration);
 }
 
-function getTarget(s) {
-    if (s.isFlexijob) return 9999;
-    // Beschikbare dagen per week bepaalt het werkritme
-    const beschikbaarPerWeek = s.availableDays ? s.availableDays.length : 7;
-    const werkdagenPerWeek   = Math.min(beschikbaarPerWeek, getCap(s));
-    // Netto werkdagen per jaar = werkweken * werkdagen - vakantie
-    const nettoDagen = 52 * werkdagenPerWeek - (s.vacationDays || 0);
-    // Uurloon per dag: contracturen / 5 werkdagen
-    const uurPerDag  = (s.fte * 38) / 5;
-    return Math.round(nettoDagen * uurPerDag);
-  }
+function getTargetHoursGlobal(s) {
+  if (s.isFlexijob) return 9999;
+  const nettoDagen = s.fte * 260 - (s.vacationDays || 0);
+  return Math.round(nettoDagen * (38 / 5));
+}
 
 function getShiftEndAbsolute(ds: string, shiftId: string): number {
   const disp = getShiftDisplay(shiftId);
