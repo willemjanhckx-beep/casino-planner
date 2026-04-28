@@ -255,36 +255,41 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         const rDag   = counts.dag   / total;
         const rAvond = counts.avond / total;
         const rNacht = counts.nacht / total;
-
-        // Doelverhouding: 1/3 elk (primaire prioriteit)
         const TARGET = 1/3;
-        const shortage = {
-          dag:   (TARGET - rDag)   + (dagNeed[ds]   > 0 ? 0.1 : 0),
-          avond: (TARGET - rAvond) + (avondNeed[ds] > 0 ? 0.1 : 0),
-          nacht: (TARGET - rNacht),
-        };
-        let shiftType = Object.entries(shortage).sort((a,b)=>b[1]-a[1])[0][0];
 
-        // Rotatie-suggestie: nacht→avond→dag binnen een aaneensluitend werkblok
-        // Enkel als suggestie: overschrijft alleen als de eerlijke verdeling het toelaat
-        // (d.w.z. de gesuggereerde shift mag niet meer dan 15% achterliggen op zijn quota)
-        const blockLen = consec[s.id]; // hoe ver in het huidige blok
-        if (blockLen > 0) {
-          // Bepaal de shift van gisteren
+        // PRIORITEIT 1: minimumbezetting — als één type nog tekort heeft, kies dat
+        const dagTekort   = dagNeed[ds]   > 0;
+        const avondTekort = avondNeed[ds] > 0;
+
+        let shiftType;
+        if (dagTekort && !avondTekort) {
+          shiftType = "dag";
+        } else if (avondTekort && !dagTekort) {
+          shiftType = "avond";
+        } else if (dagTekort && avondTekort) {
+          // Beide tekort: kies degene met grootste relatieve achterstand
+          shiftType = (TARGET - rDag) >= (TARGET - rAvond) ? "dag" : "avond";
+        } else {
+          // PRIORITEIT 2: eerlijke verdeling (geen tekort meer)
+          const shortage = {
+            dag:   TARGET - rDag,
+            avond: TARGET - rAvond,
+            nacht: TARGET - rNacht,
+          };
+          shiftType = Object.entries(shortage).sort((a,b)=>b[1]-a[1])[0][0];
+        }
+
+        // PRIORITEIT 3: rotatie nacht→avond→dag binnen werkblok
+        // Enkel toegepast als minimumbezetting al gedekt is (geen tekort)
+        if (!dagTekort && !avondTekort && consec[s.id] > 0) {
           const prev = new Date(ds); prev.setDate(prev.getDate()-1);
           const prevShift = (schedule[s.id]||{})[toDS(prev)];
-          const order = ["nacht","avond","dag"]; // rotatie: start nacht, eindig dag
+          const order = ["nacht","avond","dag"];
           const prevIdx = order.indexOf(prevShift);
-          // Suggereer de volgende stap in de rotatie (of behoud huidige positie)
           const suggestedType = prevIdx >= 0 && prevIdx < order.length-1
-            ? order[prevIdx+1]   // één stap richting "dag"
-            : prevIdx === -1
-              ? order[0]         // begin nieuw blok met nacht
-              : shiftType;       // al op dag, houd eerlijke verdeling aan
-
-          // Pas de suggestie toe als hij binnen 15% van zijn quota zit
+            ? order[prevIdx+1]
+            : prevIdx === -1 ? order[0] : shiftType;
           const rSug = counts[suggestedType] / total;
-          const rCur = counts[shiftType]     / total;
           if (suggestedType !== shiftType && (TARGET - rSug) > -0.15) {
             shiftType = suggestedType;
           }
