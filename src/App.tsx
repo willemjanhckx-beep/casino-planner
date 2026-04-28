@@ -181,7 +181,8 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   // Per medewerker: bijhouden hoeveel opeenvolgende werkdagen
   const consec = {};
-  autoStaff.forEach(s => { consec[s.id] = 0; });
+  const shiftCounts = {};
+  autoStaff.forEach(s => { consec[s.id] = 0; shiftCounts[s.id] = { dag:0, avond:0, nacht:0 }; });
 
   for (const wk of weeks) {
     const days = weekMap[wk];
@@ -247,19 +248,27 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         const streak = wasWorking ? (consec[s.id] || 0) + 1 : 1;
         if (streak > 5) continue; // max 5 op rij
 
-        // Kies shift type: probeer bezettingstekort op te vullen
-        let shiftType = "avond"; // default
-        if (dagNeed[ds] > avondNeed[ds]) shiftType = "dag";
-        else if (avondNeed[ds] > dagNeed[ds]) shiftType = "avond";
-        else {
-          // Gelijk: wissel af op basis van staffId + dag
-          const dayOfYear = Math.floor((new Date(ds) - new Date(year,0,1)) / 86400000);
-          shiftType = ((s.id + dayOfYear) % 2 === 0) ? "dag" : "avond";
-        }
+        // Kies shift type: eerlijke rotatie dag/avond/nacht + bezettingsnood
+        // Tel reeds toegewezen shifts dit jaar voor eerlijke verdeling
+        const counts = shiftCounts[s.id];
+        const total  = counts.dag + counts.avond + counts.nacht || 1;
+        const rDag   = counts.dag   / total;
+        const rAvond = counts.avond / total;
+        const rNacht = counts.nacht / total;
+
+        // Doelverhouding: 1/3 elk
+        const TARGET = 1/3;
+        const shortage = {
+          dag:   (TARGET - rDag)   + (dagNeed[ds]   > 0 ? 0.1 : 0),
+          avond: (TARGET - rAvond) + (avondNeed[ds] > 0 ? 0.1 : 0),
+          nacht: (TARGET - rNacht),
+        };
+        const shiftType = Object.entries(shortage).sort((a,b)=>b[1]-a[1])[0][0];
 
         schedule[s.id][ds] = shiftType;
-        if (shiftType === "dag")   dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
-        if (shiftType === "avond") avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
+        if (shiftType === "dag")   { dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1); shiftCounts[s.id].dag++;   }
+        if (shiftType === "avond") { avondNeed[ds] = Math.max(0, avondNeed[ds] - 1); shiftCounts[s.id].avond++; }
+        if (shiftType === "nacht") { shiftCounts[s.id].nacht++; }
         consec[s.id] = streak;
         assigned++;
       }
@@ -1041,6 +1050,15 @@ export default function App(){
               <div className="nav-label">Acties</div>
               <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={generateRoster} disabled={generating||!isAppReady}>
                 {generating?"⏳ Bezig...":"🎲 Genereer Rooster"}
+              </button>
+              <button className="btn btn-danger" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
+                if(!window.confirm("Schema volledig wissen voor "+year+"?")) return;
+                const empty={};
+                staff.forEach(s=>{ empty[s.id]={}; });
+                setSchedule(prev=>({...prev,...empty}));
+                showToast("🗑 Schema gewist voor "+year);
+              }} disabled={!isAppReady}>
+                🗑 Reset schema {year}
               </button>
               <div style={{marginTop:8,padding:"8px 10px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8}}>
                 <div style={{fontSize:10,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".1em",marginBottom:4}}>🔒 Lock tot datum</div>
