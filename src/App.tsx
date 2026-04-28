@@ -1,46 +1,41 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 const SUPABASE_URL = "https://edlcobufsarpzakzscpl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGNvYnVmc2FycHpha3pzY3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODI0NDAsImV4cCI6MjA5MjQ1ODQ0MH0.pZcav2FMpqYh2io57F1HGVAuhullZC89KB34qNUxBoQ";
 
 async function sbGet(key) {
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/planner_data?key=eq.${key}&select=value`,
-    { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } }
-  );
-  const data = await r.json();
-  if (!data || data.length === 0) return null;
-  return JSON.parse(data[0].value);
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/planner_data?key=eq.${key}&select=value`,
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } });
+    const data = await r.json();
+    if (!data || data.length === 0) return null;
+    return JSON.parse(data[0].value);
+  } catch { return null; }
 }
-
 async function sbSet(key, value) {
-  await fetch(
-    `${SUPABASE_URL}/rest/v1/planner_data`,
-    {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/planner_data`, {
       method: "POST",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates"
-      },
-      body: JSON.stringify({
-        key,
-        value: JSON.stringify(value),
-        updated_at: new Date().toISOString()
-      })
-    }
-  );
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
+      body: JSON.stringify({ key, value: JSON.stringify(value), updated_at: new Date().toISOString() })
+    });
+  } catch {}
 }
-
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
-const SHIFTS = {
-  OFF:      { id:"off",      label:"Vrij",    time:"",  startHour:0,  endHour:0,   hours:0, color:"#374151", bg:"#111827" },
-  VACATION: { id:"vacation", label:"Vakantie",time:"",  startHour:0,  endHour:0,   hours:0, color:"#065f46", bg:"#022c22" },
-  SICK:     { id:"sick",     label:"Ziek",    time:"",  startHour:0,  endHour:0,   hours:0, color:"#7f1d1d", bg:"#450a0a" },
+const SHIFT_TYPES = {
+  dag:      { id:"dag",      label:"Dag",     time:"15:00–21:00", startHour:15, hours:6,   color:"#f59e0b", bg:"#78350f" },
+  avond:    { id:"avond",    label:"Avond",   time:"17:00–01:00", startHour:17, hours:8,   color:"#3b82f6", bg:"#1e3a5f" },
+  nacht:    { id:"nacht",    label:"Nacht",   time:"21:00–05:00", startHour:21, hours:8,   color:"#8b5cf6", bg:"#3b0764" },
+  off:      { id:"off",      label:"Vrij",    time:"",            startHour:0,  hours:0,   color:"#374151", bg:"#111827" },
+  vacation: { id:"vacation", label:"Vakantie",time:"",            startHour:0,  hours:0,   color:"#065f46", bg:"#022c22" },
+  sick:     { id:"sick",     label:"Ziek",    time:"",            startHour:0,  hours:0,   color:"#7f1d1d", bg:"#450a0a" },
 };
-const FTE_VACATION = { 1.0:24, 0.8:19, 0.5:12 };
+
+function getShift(id) { return SHIFT_TYPES[id] || SHIFT_TYPES.off; }
+
+const FTE_VACATION   = { 1.0:24, 0.8:19, 0.5:12 };
 const CONTRACT_TYPES = [
   { value:1.0, label:"Voltijds (100%)", weekHours:38 },
   { value:0.8, label:"4/5 (80%)",       weekHours:30.4 },
@@ -100,15 +95,11 @@ const INITIAL_STAFF = [
   {id:14,name:"Flex 2",           fte:0,   color:"#9ca3af", vacationDays:0,  availableDays:[0,1,2,3,4,5,6], partTimeMode:"spread", isFlexijob:true,  autoSchedule:false},
 ];
 
-
-
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 const SK = { staff:"co3_staff", schedule:"co3_schedule", settings:"co3_settings",
-             holidays:"co3_holidays", vacations:"co3_vacations", year:"co3_year",
-             locks:"co3_locks" };
+             holidays:"co3_holidays", vacations:"co3_vacations", year:"co3_year", locks:"co3_locks" };
 function load(k,fb){ try{ const r=localStorage.getItem(k); return r?JSON.parse(r):fb; }catch{ return fb; } }
 function save(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
-
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 function getISOWeek(date){
@@ -119,12 +110,13 @@ function getISOWeek(date){
 }
 function getWeekDates(year,week){
   const jan4=new Date(year,0,4);
-  const s=new Date(jan4);
-  s.setDate(jan4.getDate()-((jan4.getDay()+6)%7));
+  const s=new Date(jan4); s.setDate(jan4.getDate()-((jan4.getDay()+6)%7));
   const start=new Date(s); start.setDate(s.getDate()+(week-1)*7);
   return Array.from({length:7},(_,i)=>{ const d=new Date(start); d.setDate(start.getDate()+i); return d; });
 }
-function toDS(date){   const y = date.getFullYear();   const m = String(date.getMonth() + 1).padStart(2, "0");   const d = String(date.getDate()).padStart(2, "0");   return `${y}-${m}-${d}`; }
+function toDS(date){
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+}
 function isHoliday(ds,holidays){ return holidays.includes(ds); }
 function isSchoolVacation(ds,vacations){ return vacations.some(v=>ds>=v.start&&ds<=v.end); }
 function isWeekend(date){ const d=date.getDay(); return d===0||d===6; }
@@ -149,446 +141,142 @@ function isAvailOnDate(s,ds,isoWeek){
   }
   return true;
 }
-function isLeapYear(y){ return (y%4===0&&y%100!==0)||(y%400===0); }
-function getWeeksInYear(y){
-  const dec28=new Date(y,11,28);
-  return getISOWeek(dec28);
-}
+function getWeeksInYear(y){ return getISOWeek(new Date(y,11,28)); }
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
-// ─── GENERATOR ───────────────────────────────────────────────────────────────
-
-const SHIFT_POOLS = [
-  { start: 15.0, duration: 6.0,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
-  { start: 15.5, duration: 7.0,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
-  { start: 16.0, duration: 7.0,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
-  { start: 16.5, duration: 7.5,  label:"Dag",   color:"#f59e0b", bg:"#78350f" },
-  { start: 17.0, duration: 7.0,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
-  { start: 17.5, duration: 7.5,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
-  { start: 18.0, duration: 7.0,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
-  { start: 18.5, duration: 7.5,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
-  { start: 19.0, duration: 7.0,  label:"Avond", color:"#3b82f6", bg:"#1e3a5f" },
-  { start: 20.0, duration: 7.5,  label:"Laat",  color:"#8b5cf6", bg:"#3b0764" },
-  { start: 20.5, duration: 8.0,  label:"Laat",  color:"#8b5cf6", bg:"#3b0764" },
-  { start: 21.0, duration: 7.5,  label:"Laat",  color:"#8b5cf6", bg:"#3b0764" },
-  { start: 21.5, duration: 8.0,  label:"Nacht", color:"#06b6d4", bg:"#0c3547" },
-  { start: 22.0, duration: 7.5,  label:"Nacht", color:"#06b6d4", bg:"#0c3547" },
-  { start: 22.5, duration: 7.0,  label:"Nacht", color:"#06b6d4", bg:"#0c3547" },
-];
-
-function getPersonalShift(staffId, dayOfYear, hoursRatio) {
-  const len        = SHIFT_POOLS.length;
-  const personBase = (staffId * 3) % len;
-  const dayVariant = dayOfYear % len;
-  const rawIdx     = Math.floor((personBase * 0.6 + dayVariant * 0.4 + hoursRatio * 2) % len);
-  return SHIFT_POOLS[Math.max(0, Math.min(rawIdx, len - 1))];
-}
-
-function deriveShiftId(start: number, duration: number): string {
-  return makeShiftId(start, duration);
-}
-
-
-function getShiftEndAbsolute(ds: string, shiftId: string): number {
-  const disp = getShiftDisplay(shiftId);
-  if (!disp || disp.hours === 0) return 0;
-  const dayStartHours = new Date(ds).getTime() / (1000 * 60 * 60);
-  return dayStartHours + disp.startHour + disp.hours;
-}
-
-function hasEnoughRest(prevDs, prevShiftId, nextDs, minRestHours) {
-  const prevShift = getShiftDisplay(prevShiftId || "off");
-  if (!prevShift || prevShift.hours === 0) return true;
-  const prevEnd = getShiftEndAbsolute(prevDs, prevShiftId);
-  if (prevEnd === 0) return true;
-  const earliestNextStart = new Date(nextDs).getTime() / (1000 * 60 * 60) + 15;
-  return (earliestNextStart - prevEnd) >= minRestHours;
-}
-
-function getDayIndex(date, year) {
-  const startOfYear = new Date(year, 0, 1);
-  return Math.floor((date.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function getDaysInYear(year) {
-  return ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 366 : 365;
-}
-
-function buildWorkBlocks(staff, year) {
-  const patterns = {};
-  staff.forEach(s => { patterns[s.id] = null; });
-  return patterns;
-}
-
-function getBlockPosition(workBlocks, staffId, dayIdx) {
-  const block = workBlocks[staffId];
-  if (!block || block[dayIdx] !== "work") return { posInBlock: 0, blockLen: 1 };
-
-  let blockStart = dayIdx;
-  while (blockStart > 0 && block[blockStart - 1] === "work") blockStart--;
-
-  let blockEnd = dayIdx;
-  while (blockEnd < block.length - 1 && block[blockEnd + 1] === "work") blockEnd++;
-
-  return { posInBlock: dayIdx - blockStart, blockLen: blockEnd - blockStart + 1 };
-}
-
-function isCoverageSufficient(ds, currentSchedule, staff, demand) {
-  let morning = 0, evening = 0;
-  staff.forEach(s => {
-    const sh = (currentSchedule[s.id] || {})[ds];
-    const disp = getShiftDisplay(sh || "off");
-    if (disp.hours > 0 && disp.startHour < 17) morning++;
-    if (disp.hours > 0 && disp.startHour >= 17) evening++;
-  });
-  return morning >= demand.morning && evening >= demand.evening;
-}
-
-// Tijdblokken binnen de werkdag 15:00–05:30
-const TIME_BLOCKS = [
-  { label: "15:00–19:00", start: 15, end: 19 },
-  { label: "19:00–23:00", start: 19, end: 23 },
-  { label: "23:00–02:30", start: 23, end: 26.5 },
-  { label: "02:30–05:30", start: 26.5, end: 29.5 },
-];
-
-function getBlockCoverage(ds, currentSchedule, staff) {
-  const coverage = TIME_BLOCKS.map(b => ({ ...b, count: 0 }));
-  staff.forEach(s => {
-    const shiftId = (currentSchedule[s.id] || {})[ds];
-    if (!shiftId || shiftId === "off" || shiftId === "vacation" || shiftId === "sick") return;
-    const shift = getShiftDisplay(shiftId);
-    if (!shift || shift.hours === 0) return;
-    const shiftStart = shift.startHour;
-    const shiftEnd   = shift.startHour + shift.hours;
-    coverage.forEach(b => {
-      if (shiftStart < b.end && shiftEnd > b.start) b.count++;
-    });
-  });
-  return coverage;
-}
-
-type AssignedShift = {
-  id: string;           // "shift_15.0_6.0"
-  label: string;
-  time: string;         // "15:00–21:00"
-  startHour: number;
-  endHour: number;
-  hours: number;
-  color: string;
-  bg: string;
-};
-
-function makeShiftId(start: number, duration: number): string {
-  return `shift_${start}_${duration}`;
-}
-
-function parseShiftId(id: string): AssignedShift | null {
-  if (!id || !id.startsWith("shift_")) return null;
-  const parts = id.replace("shift_", "").split("_");
-  if (parts.length < 2) return null;
-  const start = parseFloat(parts[0]);
-  const duration = parseFloat(parts[1]);
-  const pool = SHIFT_POOLS.find(p => p.start === start && p.duration === duration);
-  if (!pool) return null;
-  const endHour = start + duration;
-  const fmt = (h: number) => {
-    const realH = h >= 24 ? h - 24 : h;
-    return `${String(Math.floor(realH)).padStart(2,"0")}:${realH % 1 === 0.5 ? "30" : "00"}`;
-  };
-  return {
-    id,
-    label: pool.label,
-    time: `${fmt(start)}–${fmt(endHour)}`,
-    startHour: start,
-    endHour,
-    hours: duration,
-    color: pool.color,
-    bg: pool.bg,
-  };
-}
-
-function getShiftDisplay(shiftId: string): AssignedShift {
-  if (!shiftId || shiftId === "off")      return { id:"off",      label:"Vrij",    time:"", startHour:0, endHour:0, hours:0, color:"#374151", bg:"#111827" };
-  if (shiftId === "vacation")             return { id:"vacation", label:"Vakantie",time:"", startHour:0, endHour:0, hours:0, color:"#065f46", bg:"#022c22" };
-  if (shiftId === "sick")                 return { id:"sick",     label:"Ziek",    time:"", startHour:0, endHour:0, hours:0, color:"#7f1d1d", bg:"#450a0a" };
-  const parsed = parseShiftId(shiftId);
-  if (parsed) return parsed;
-  return { id:"off", label:"Vrij", time:"", startHour:0, endHour:0, hours:0, color:"#374151", bg:"#111827" };
-}
-
-
-
-function getCap(s) {
-if (s.isFlexijob) return 6;
-if (s.fte >= 1.0) return 5;
-if (s.fte >= 0.8) return 4;
-return 3;
-}
-
-function getTarget(s) {
-if (s.isFlexijob) return 9999;
-const AVG_SHIFT_HOURS = 7.25;
-const nettoDagen = s.fte * 260 - (s.vacationDays || 0);
-return Math.round(nettoDagen * AVG_SHIFT_HOURS);
-}
-
-function byNeed(arr, hoursWorked, getTargetFn, dww, dayIdx) {
-return […arr].sort((a, b) => {
-if (dww[a.id] !== dww[b.id]) return dww[a.id] - dww[b.id];
-const ratioA = hoursWorked[a.id] / Math.max(getTargetFn(a), 1);
-const ratioB = hoursWorked[b.id] / Math.max(getTargetFn(b), 1);
-if (Math.abs(ratioA - ratioB) > 0.01) return ratioA - ratioB;
-return ((a.id + dayIdx) % 13) - ((b.id + dayIdx) % 13);
-});
-}
+// ─── SCHEDULER ────────────────────────────────────────────────────────────────
+// Doelstelling:
+//   1. Elke medewerker werkt ~4-5 dagen/week (afhankelijk van FTE)
+//   2. Elke dag wordt de minimumbezetting (dag+avond) zo goed mogelijk gehaald
+//   3. Max 5 opeenvolgende werkdagen, daarna min 2 vrij
+//   4. Locks en globale lockDate worden gerespecteerd
+// Aanpak: week-per-week, per week bepalen welke dagen iemand werkt
 
 function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
-const autoStaff = staff.filter(s => s.autoSchedule !== false);
-const vast      = autoStaff.filter(s => !s.isFlexijob);
-const flexi     = autoStaff.filter(s =>  s.isFlexijob);
-const all       = […vast, …flexi];
+  const autoStaff = staff.filter(s => s.autoSchedule !== false);
+  const schedule  = {};
+  autoStaff.forEach(s => { schedule[s.id] = { ...(existingSchedule[s.id] || {}) }; });
 
-const schedule = {};
-const stats    = {};
-all.forEach(s => {
-schedule[s.id] = { …(existingSchedule[s.id] || {}) };
-stats[s.id]    = { weekendShifts: 0, nightShifts: 0, totalHours: 0, consecutiveNights: 0 };
-});
+  const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
 
-// Bestaande uren optellen
-const hoursWorked = {};
-all.forEach(s => {
-let h = 0;
-Object.entries(schedule[s.id]).forEach(([ds, sid]) => {
-if (!sid || [“off”,“vacation”,“sick”].includes(sid)) return;
-const d = getShiftDisplay(sid);
-if (d && d.hours > 0) h += d.hours;
-});
-hoursWorked[s.id] = h;
-});
+  // Bereken target werkdagen per week per medewerker
+  // Voltijds = 5 dagen/week, 80% = 4, 50% = 2-3
+  function targetDaysPerWeek(s) {
+    if (s.isFlexijob) return 3;
+    if (s.fte >= 1.0) return 5;
+    if (s.fte >= 0.8) return 4;
+    return 2; // 50%
+  }
 
-const lockDateObj = lockDate ? new Date(lockDate) : null;
-const totalDays   = getDaysInYear(year);
-const dagPool     = SHIFT_POOLS.filter(p => p.start < 17);
-const avondPool   = SHIFT_POOLS.filter(p => p.start >= 17);
+  // Alle dagen van het jaar, per week gegroepeerd
+  const weekMap = {}; // weekNr -> [dateStr, ...]
+  for (let d = new Date(year, 0, 1); d.getFullYear() === year; d.setDate(d.getDate() + 1)) {
+    const ds = toDS(new Date(d));
+    const wk = getISOWeek(new Date(d));
+    if (!weekMap[wk]) weekMap[wk] = [];
+    weekMap[wk].push(ds);
+  }
 
-// Weekcap teller — reset elke maandag
-const dww = {};
-all.forEach(s => { dww[s.id] = 0; });
+  const weeks = Object.keys(weekMap).map(Number).sort((a,b)=>a-b);
 
-// Debug: bijhouden waarom iemand niet ingepland wordt
-const skipLog = {};
-all.forEach(s => { skipLog[s.id] = {}; });
+  // Per medewerker: bijhouden hoeveel opeenvolgende werkdagen
+  const consec = {};
+  autoStaff.forEach(s => { consec[s.id] = 0; });
 
-function canWorkCheck(s, ds, d, isoWeek) {
-if (!isAvailOnDate(s, ds, isoWeek))
-return { ok: false, reason: “niet beschikbaar” };
-if (locks[lockKey(s.id, ds)])
-return { ok: false, reason: “cel gelockt” };
-if (stats[s.id].consecutiveNights >= (settings.maxConsecNights || 4))
-return { ok: false, reason: “max opeenvolgende nachten” };
-if (!s.isFlexijob && hoursWorked[s.id] >= getTarget(s) * 1.05)
-return { ok: false, reason: `uren-target bereikt (${Math.round(hoursWorked[s.id])}u/${Math.round(getTarget(s))}u)` };
-if (dww[s.id] >= getCap(s))
-return { ok: false, reason: `weekcap bereikt (${dww[s.id]}/${getCap(s)})` };
-const prev = new Date(d);
-prev.setDate(prev.getDate() - 1);
-const prevDs    = toDS(prev);
-const prevShift = (schedule[s.id] || {})[prevDs];
-if (prevShift && ![“off”,“vacation”,“sick”].includes(prevShift)) {
-if (!hasEnoughRest(prevDs, prevShift, ds, settings.minRestHours || 11))
-return { ok: false, reason: `onvoldoende rust (min ${settings.minRestHours}u)` };
-}
-return { ok: true, reason: null };
-}
+  for (const wk of weeks) {
+    const days = weekMap[wk];
 
-function assign(s, ds, d, dayIdx, pool) {
-const tpl = pool[(s.id * 7 + dayIdx * 3) % pool.length];
-const dur = Math.min(8.5, Math.max(6,
-((s.id + dayIdx) % 3 === 0) ? tpl.duration + 0.5 : tpl.duration
-));
-schedule[s.id][ds]      = makeShiftId(tpl.start, dur);
-hoursWorked[s.id]      += dur;
-stats[s.id].totalHours += dur;
-dww[s.id]++;
-if (tpl.start >= 21) {
-stats[s.id].consecutiveNights++;
-stats[s.id].nightShifts++;
-} else {
-stats[s.id].consecutiveNights = 0;
-}
-if (isWeekend(d)) stats[s.id].weekendShifts++;
-}
+    // Bepaal per dag de al-geboekte bezetting (locked + vacation/sick)
+    // en bereken hoeveel extra mensen we nog nodig hebben
+    const dagNeed    = {}; // ds -> nog nodig voor dag-shift
+    const avondNeed  = {}; // ds -> nog nodig voor avond-shift
+    days.forEach(ds => {
+      const locked = lockDateObj && new Date(ds) <= lockDateObj;
+      if (locked) { dagNeed[ds] = 0; avondNeed[ds] = 0; return; }
+      const demand = getDayDemand(ds, settings, holidays, vacations);
+      let dagCount = 0, avondCount = 0;
+      autoStaff.forEach(s => {
+        const ex = (schedule[s.id] || {})[ds];
+        if (ex === "dag")   dagCount++;
+        if (ex === "avond" || ex === "nacht") avondCount++;
+      });
+      dagNeed[ds]   = Math.max(0, demand.morning - dagCount);
+      avondNeed[ds] = Math.max(0, demand.evening - avondCount);
+    });
 
-// ─── HOOFDLUS ───────────────────────────────────────────────────────────────
-for (let d = new Date(year, 0, 1); d <= new Date(year, 11, 31); d.setDate(d.getDate() + 1)) {
-const ds      = toDS(d);
-const dayIdx  = getDayIndex(d, year);
-const isoWeek = getISOWeek(d);
-const dow     = (d.getDay() + 6) % 7; // 0=ma … 6=zo
-const daysLeft = totalDays - dayIdx;
+    for (const s of autoStaff) {
+      const target = targetDaysPerWeek(s);
 
-```
-// FIX 2: Reset weekcap elke maandag voor iedereen
-if (dow === 0) {
-  all.forEach(s => { dww[s.id] = 0; });
-}
+      // Welke dagen zijn al ingepland (locked/vacation/sick)?
+      const alreadyWorking = days.filter(ds => {
+        const ex = (schedule[s.id] || {})[ds];
+        return ex && ex !== "off";
+      });
+      const neededExtra = Math.max(0, target - alreadyWorking.length);
 
-if (lockDateObj && d <= lockDateObj) continue;
+      // Kandidaatdagen: niet gelockt, beschikbaar, niet al ingevuld
+      const candidates = days.filter(ds => {
+        if (lockDateObj && new Date(ds) <= lockDateObj) return false;
+        if (locks[lockKey(s.id, ds)]) return false;
+        const ex = (schedule[s.id] || {})[ds];
+        if (ex && ex !== "off") return false; // al ingepland
+        const isoWeek = getISOWeek(new Date(ds));
+        if (!isAvailOnDate(s, ds, isoWeek)) return false;
+        return true;
+      });
 
-const demand = getDayDemand(ds, settings, holidays, vacations);
+      // Sorteer kandidaten zodat dagen met de grootste bezettingsnood eerst komen
+      candidates.sort((a, b) => {
+        const needA = dagNeed[a] + avondNeed[a];
+        const needB = dagNeed[b] + avondNeed[b];
+        return needB - needA; // hoogste nood eerst
+      });
 
-// Markeer locked/vacation/sick als assigned
-const assigned = new Set();
-all.forEach(s => {
-  const ex = (schedule[s.id] || {})[ds];
-  if (locks[lockKey(s.id, ds)] || ex === "vacation" || ex === "sick") {
-    assigned.add(s.id);
-    if (ex && !["off","vacation","sick"].includes(ex)) {
-      dww[s.id] = Math.min(dww[s.id] + 1, getCap(s));
+      // Kies de beste dagen, rekening houdend met max 5 opeenvolgend
+      let assigned = 0;
+      for (const ds of candidates) {
+        if (assigned >= neededExtra) break;
+
+        // Check opeenvolgend: kijk naar dag vóór
+        const prev = new Date(ds); prev.setDate(prev.getDate() - 1);
+        const prevDs = toDS(prev);
+        const prevShift = (schedule[s.id] || {})[prevDs];
+        const wasWorking = prevShift && prevShift !== "off";
+
+        // Reset of verhoog streak
+        const streak = wasWorking ? (consec[s.id] || 0) + 1 : 1;
+        if (streak > 5) continue; // max 5 op rij
+
+        // Kies shift type: probeer bezettingstekort op te vullen
+        let shiftType = "avond"; // default
+        if (dagNeed[ds] > avondNeed[ds]) shiftType = "dag";
+        else if (avondNeed[ds] > dagNeed[ds]) shiftType = "avond";
+        else {
+          // Gelijk: wissel af op basis van staffId + dag
+          const dayOfYear = Math.floor((new Date(ds) - new Date(year,0,1)) / 86400000);
+          shiftType = ((s.id + dayOfYear) % 2 === 0) ? "dag" : "avond";
+        }
+
+        schedule[s.id][ds] = shiftType;
+        if (shiftType === "dag")   dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
+        if (shiftType === "avond") avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
+        consec[s.id] = streak;
+        assigned++;
+      }
+
+      // Resterende dagen van de week -> "off" (als niet al ingevuld)
+      days.forEach(ds => {
+        if (lockDateObj && new Date(ds) <= lockDateObj) return;
+        const ex = (schedule[s.id] || {})[ds];
+        if (!ex || ex === "off") {
+          schedule[s.id][ds] = "off";
+        }
+      });
     }
   }
-});
 
-// Bepaal kandidaten
-const kandidaten = [];
-all.forEach(s => {
-  if (assigned.has(s.id)) return;
-  const check = canWorkCheck(s, ds, d, isoWeek);
-  if (check.ok) {
-    kandidaten.push(s);
-  } else {
-    skipLog[s.id][ds] = check.reason;
-  }
-});
-
-const sorted = (list) => byNeed(list.filter(s => !assigned.has(s.id)), hoursWorked, getTarget, dww, dayIdx);
-
-// ── FASE 1A: Avond minimum ─────────────────────────────────────────────
-let avondCount = 0;
-for (const s of sorted(kandidaten)) {
-  if (avondCount >= demand.evening) break;
-  assign(s, ds, d, dayIdx, avondPool);
-  assigned.add(s.id);
-  avondCount++;
+  return { schedule };
 }
-
-// ── FASE 1B: Dag minimum ───────────────────────────────────────────────
-let dagCount = 0;
-for (const s of sorted(kandidaten)) {
-  if (dagCount >= demand.morning) break;
-  assign(s, ds, d, dayIdx, dagPool);
-  assigned.add(s.id);
-  dagCount++;
-}
-
-// ── FASE 2: Pro-rata uren-tekort ───────────────────────────────────────
-// FIX 3: drempel op basis van pro-rata i.p.v. absolut rem/daysLeft
-for (const s of byNeed(
-  kandidaten.filter(s => !assigned.has(s.id) && !s.isFlexijob),
-  hoursWorked, getTarget, dww, dayIdx
-)) {
-  const target        = getTarget(s);
-  const dayRatio      = dayIdx / Math.max(totalDays, 1);
-  const proRata       = target * dayRatio;
-  const achterstand   = proRata - hoursWorked[s.id];
-  const shiftAchter   = achterstand / 7.25;
-  const yearRemPct    = daysLeft / totalDays;
-
-  const minstensEenShiftAchter = shiftAchter >= 1.0;
-  const lichtAchterMaarVroeg   = yearRemPct > 0.2 && (achterstand / Math.max(target, 1)) > 0.03;
-
-  if (!minstensEenShiftAchter && !lichtAchterMaarVroeg) {
-    skipLog[s.id][ds] = `fase2 skip: ${shiftAchter.toFixed(2)} shifts achter`;
-    continue;
-  }
-
-  let av = 0, dg = 0;
-  assigned.forEach(id => {
-    const sh = (schedule[id] || {})[ds];
-    const dp = getShiftDisplay(sh || "off");
-    if (dp.hours > 0) { if (dp.startHour >= 17) av++; else dg++; }
-  });
-  assign(s, ds, d, dayIdx, av <= dg ? avondPool : dagPool);
-  assigned.add(s.id);
-}
-
-// ── FASE 3: Agressief bijplannen op basis van jaaruren ────────────────
-// FIX 6: iedereen die >8% onder target zit en nog weekruimte heeft, werkt
-for (const s of byNeed(
-  kandidaten.filter(s => !assigned.has(s.id) && !s.isFlexijob),
-  hoursWorked, getTarget, dww, dayIdx
-)) {
-  const target = getTarget(s);
-  const ratio  = hoursWorked[s.id] / Math.max(target, 1);
-
-  if (ratio < 0.92 && dww[s.id] < getCap(s) - 1) {
-    let av = 0, dg = 0;
-    assigned.forEach(id => {
-      const sh = (schedule[id] || {})[ds];
-      const dp = getShiftDisplay(sh || "off");
-      if (dp.hours > 0) { if (dp.startHour >= 17) av++; else dg++; }
-    });
-    assign(s, ds, d, dayIdx, av <= dg ? avondPool : dagPool);
-    assigned.add(s.id);
-  } else {
-    skipLog[s.id][ds] = `fase3 skip: ratio=${(ratio*100).toFixed(1)}%`;
-  }
-}
-
-// ── Niet-ingeplanden → vrij ────────────────────────────────────────────
-all.forEach(s => {
-  if (assigned.has(s.id)) return;
-  const ex = (schedule[s.id] || {})[ds];
-  if (ex === "vacation" || ex === "sick") return;
-  schedule[s.id][ds]            = "off";
-  stats[s.id].consecutiveNights = 0;
-});
-```
-
-}
-
-// ─── EINDSTATISTIEKEN ────────────────────────────────────────────────────────
-all.forEach(s => {
-const target  = getTarget(s);
-const planned = hoursWorked[s.id];
-const diff    = planned - target;
-stats[s.id].targetHours     = Math.round(target);
-stats[s.id].plannedHours    = Math.round(planned);
-stats[s.id].hoursDiff       = Math.round(diff);
-stats[s.id].withinTolerance = Math.abs(diff / Math.max(target, 1)) <= 0.05;
-});
-
-// ─── DEBUG CONSOLE OUTPUT ────────────────────────────────────────────────────
-console.group(“🎰 Plannings-debug rapport”);
-const summary = all.filter(s => !s.isFlexijob).map(s => {
-const target      = getTarget(s);
-const planned     = hoursWorked[s.id];
-const shifts      = Object.values(schedule[s.id] || {}).filter(sh => sh && sh.startsWith(“shift_”)).length;
-const pct         = target > 0 ? Math.round((planned / target) * 100) : 0;
-const status      = pct >= 95 ? “✅ OK” : pct >= 85 ? “🟡 Licht onder” : “🔴 ONDER”;
-
-```
-// Top-3 redenen van skip
-const counts = {};
-Object.values(skipLog[s.id] || {}).forEach(r => { counts[r] = (counts[r] || 0) + 1; });
-const topSkips = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,3).map(([r,c]) => `${r} (${c}x)`).join(" | ");
-
-return { naam: s.name, fte: s.fte, target: Math.round(target), gepland: Math.round(planned), pct: `${pct}%`, shifts, status, topSkipRedenen: topSkips };
-```
-
-});
-console.table(summary);
-const onderGepland = summary.filter(r => parseInt(r.pct) < 90);
-if (onderGepland.length > 0) {
-console.warn(“⚠️ Ondergepland (<90%):”, onderGepland.map(r => `${r.naam} ${r.pct}`).join(”, “));
-}
-console.groupEnd();
-
-return { schedule, stats };
-}
-
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
@@ -626,8 +314,8 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .btn-danger{border-color:#7f1d1d;color:var(--red);}
 .btn-danger:hover{background:#7f1d1d30;}
 .btn-flex{background:#1f2937;border-color:#374151;color:#9ca3af;}
-.btn-lock{background:#1e3a5f;border-color:#3b82f6;color:#60a5fa;}
 .content{flex:1;overflow:auto;padding:24px;}
+@media(max-width:768px){.content{padding:12px;}}
 .week-grid{width:100%;border-collapse:collapse;}
 .week-grid th{background:var(--surface2);padding:8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);border:1px solid var(--border);font-weight:500;white-space:nowrap;}
 .week-grid th.weekend{color:var(--gold);}
@@ -685,11 +373,10 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 @keyframes slideIn{from{transform:translateY(20px);opacity:0;}to{transform:translateY(0);opacity:1;}}
 @keyframes motivatieIn{from{transform:translateY(28px) scale(.95);opacity:0;}to{transform:translateY(0) scale(1);opacity:1;}}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
-.shift-picker{position:fixed;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:8px;z-index:50;display:flex;flex-direction:column;gap:4px;box-shadow:0 8px 32px rgba(0,0,0,.5);}
+.shift-picker{position:fixed;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:8px;z-index:50;display:flex;flex-direction:column;gap:4px;box-shadow:0 8px 32px rgba(0,0,0,.5);max-height:80vh;overflow-y:auto;}
 .shift-option{padding:8px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;display:flex;gap:8px;align-items:center;transition:filter .1s;}
 .shift-option:hover{filter:brightness(1.3);}
-.alert-banner{background:#7f1d1d30;border:1px solid #7f1d1d;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:12px;color:var(--red);display:flex;align-items:center;gap:8px;cursor:pointer;transition:background .15s;}
-.alert-banner:hover{background:#7f1d1d50;}
+.alert-banner{background:#7f1d1d30;border:1px solid #7f1d1d;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:12px;color:var(--red);display:flex;align-items:center;gap:8px;cursor:pointer;}
 .warn-banner{background:#78350f30;border:1px solid #78350f;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:12px;color:var(--yellow);display:flex;align-items:center;gap:8px;}
 .legend{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
 .legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);}
@@ -698,66 +385,32 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .day-check{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:var(--text-dim);cursor:pointer;}
 .day-check input{accent-color:var(--gold);width:14px;height:14px;cursor:pointer;}
 .day-check.active{color:var(--text);}
-.gas-steps{counter-reset:step;}
-.gas-step{counter-increment:step;display:flex;gap:12px;margin-bottom:16px;padding:14px;background:var(--surface3);border-radius:8px;border-left:3px solid var(--gold);}
-.gas-step::before{content:counter(step);font-family:'IBM Plex Mono',monospace;font-size:18px;color:var(--gold);font-weight:700;min-width:24px;}
-.gas-code{background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:14px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#e6edf3;overflow-x:auto;white-space:pre;margin-top:8px;max-height:260px;overflow-y:auto;}
 .slider-row{display:flex;align-items:center;gap:10px;}
 .slider-row input[type=range]{flex:1;accent-color:var(--gold);}
 .freq-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;}
-.storage-options{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
-.storage-card{background:var(--surface3);border:1px solid var(--border);border-radius:10px;padding:16px;}
-.storage-card h3{font-size:13px;color:var(--gold);margin-bottom:8px;font-family:'DM Serif Display',serif;}
-.storage-card p{font-size:12px;color:var(--text-dim);line-height:1.6;}
-.pro{color:var(--green);font-size:11px;margin-top:2px;}
-.con{color:var(--red);font-size:11px;margin-top:2px;}
 .lock-date-badge{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--yellow);background:#78350f30;padding:3px 8px;border-radius:4px;border:1px solid #78350f;}
 .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:299;}
 .sidebar-overlay.open{display:block;}
-@media(max-width:768px){.content{padding:12px;}.modal{width:95vw;padding:16px;}.shift-picker{max-width:210px;}}
 `;
 
-// ─── SHIFT PICKER ────────────────────────────────────────────────────────────
+// ─── SHIFT PICKER ─────────────────────────────────────────────────────────────
 function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
   useEffect(()=>{ const h=()=>onClose(); window.addEventListener("click",h); return()=>window.removeEventListener("click",h); },[onClose]);
+  const shiftOpts = ["dag","avond","nacht","off","vacation","sick"];
   return(
-    <div className="shift-picker" style={{top:pos.y,left:Math.min(pos.x,window.innerWidth-240)}} onClick={e=>e.stopPropagation()}>
-      {/* Vaste statussen */}
-      {[
-        {id:"off",      label:"Vrij",    time:"", color:"#374151", bg:"#111827"},
-        {id:"vacation", label:"Vakantie",time:"", color:"#065f46", bg:"#022c22"},
-        {id:"sick",     label:"Ziek",    time:"", color:"#7f1d1d", bg:"#450a0a"},
-      ].map(s=>(
-        <div key={s.id} className="shift-option" style={{background:s.bg,color:s.color}} onClick={()=>{onSelect(s.id);onClose();}}>
-          <div style={{width:8,height:8,borderRadius:3,background:s.color}}/>
-          <span>{s.label}</span>
-        </div>
-      ))}
-      <div style={{borderTop:"1px solid var(--border)",margin:"4px 0",fontSize:10,color:"var(--text-dim)",padding:"4px 0 2px"}}>— Dag shifts —</div>
-      {SHIFT_POOLS.filter(p=>p.start<17).map(p=>{
-        const disp=getShiftDisplay(makeShiftId(p.start,p.duration));
+    <div className="shift-picker" style={{top:Math.min(pos.y,window.innerHeight-320),left:Math.min(pos.x,window.innerWidth-220)}} onClick={e=>e.stopPropagation()}>
+      {shiftOpts.map(id=>{
+        const s=getShift(id);
         return(
-          <div key={disp.id} className="shift-option" style={{background:disp.bg,color:disp.color}} onClick={()=>{onSelect(disp.id);onClose();}}>
-            <div style={{width:8,height:8,borderRadius:3,background:disp.color}}/>
-            <span style={{minWidth:50}}>{disp.label}</span>
-            <span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{disp.time}</span>
-          </div>
-        );
-      })}
-      <div style={{borderTop:"1px solid var(--border)",margin:"4px 0",fontSize:10,color:"var(--text-dim)",padding:"4px 0 2px"}}>— Avond / Nacht shifts —</div>
-      {SHIFT_POOLS.filter(p=>p.start>=17).map(p=>{
-        const disp=getShiftDisplay(makeShiftId(p.start,p.duration));
-        return(
-          <div key={disp.id} className="shift-option" style={{background:disp.bg,color:disp.color}} onClick={()=>{onSelect(disp.id);onClose();}}>
-            <div style={{width:8,height:8,borderRadius:3,background:disp.color}}/>
-            <span style={{minWidth:50}}>{disp.label}</span>
-            <span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{disp.time}</span>
+          <div key={id} className="shift-option" style={{background:s.bg,color:s.color}} onClick={()=>{onSelect(id);onClose();}}>
+            <div style={{width:8,height:8,borderRadius:3,background:s.color}}/>
+            <span style={{minWidth:55}}>{s.label}</span>
+            {s.time&&<span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:10}}>{s.time}</span>}
           </div>
         );
       })}
       <div style={{borderTop:"1px solid var(--border)",marginTop:4,paddingTop:4}}>
-        <div className="shift-option" style={{background:isLocked?"#1e3a5f30":"#1e3a5f",color:"#60a5fa"}}
-          onClick={()=>{onToggleLock();onClose();}}>
+        <div className="shift-option" style={{background:"#1e3a5f30",color:"#60a5fa"}} onClick={()=>{onToggleLock();onClose();}}>
           {isLocked?"🔓 Ontgrendelen":"🔒 Vergrendelen"}
         </div>
       </div>
@@ -768,106 +421,50 @@ function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
 // ─── WEEK VIEW ────────────────────────────────────────────────────────────────
 function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vacations,locks,setLocks,lockDate,onNavigateAlert}){
   const [picker,setPicker]=useState(null);
-  const [unavailWarn,setUnavailWarn]=useState(null);
+  const [warn,setWarn]=useState(null);
   const dates=getWeekDates(year,weekNum);
-  const weeksInYear=getWeeksInYear(year);
 
-  const handleShiftClick=useCallback((e,staffId,dateStr,isLocked)=>{
-    // Globale lockdate blokkeert altijd
-    const lockDateObj=lockDate?new Date(lockDate):null;
-    if(lockDateObj&&new Date(dateStr)<=lockDateObj){
-      setUnavailWarn("🔒 Deze datum is globaal gelockt.");
-      setTimeout(()=>setUnavailWarn(null),3000);
-      return;
-    }
-    // Lock beschermt enkel tegen auto-generatie, cel blijft altijd manueel aanpasbaar
+  const handleClick=useCallback((e,sid,ds,locked)=>{
+    const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
+    if(lockDateObj&&new Date(ds)<=lockDateObj){ setWarn("🔒 Globaal gelockt."); setTimeout(()=>setWarn(null),2500); return; }
     e.stopPropagation();
-    setPicker({x:e.clientX,y:e.clientY,staffId,dateStr});
-  },[lockDate,setUnavailWarn]);
+    setPicker({x:e.clientX,y:e.clientY,staffId:sid,dateStr:ds});
+  },[lockDate]);
 
-
-const handleSelect=useCallback((shiftId)=>{
+  const handleSelect=useCallback((shiftId)=>{
     if(!picker) return;
     const {staffId,dateStr}=picker;
-    const s=staff.find(x=>x.id===staffId);
-    const date=new Date(dateStr); const dow=(date.getDay()+6)%7;
-    if(s&&!["off","vacation","sick"].includes(shiftId)&&!s.availableDays.includes(dow)){
-      setUnavailWarn(`⚠️ ${s.name} is normaal niet beschikbaar op ${DAYS_FULL[dow]}.`);
-      setTimeout(()=>setUnavailWarn(null),4000);
-    }
-    if(shiftId==="vacation"){
-      const used=countVacDays(staffId,schedule,year);
-      if(used>=(s?.vacationDays||0)){
-        setUnavailWarn(`⚠️ ${s?.name} heeft geen vakantiedagen meer.`);
-        setTimeout(()=>setUnavailWarn(null),4000);
-      }
-    }
-           setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
-    // Vakantie/ziekte altijd locken
-    // Expliciet ontgrendelde cellen (false) blijven unlocked na aanpassing
-    // Alle andere handmatige aanpassingen worden gelockt
-    if(shiftId==="vacation"||shiftId==="sick"){
+    setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
+    if(shiftId==="vacation"||shiftId==="sick")
       setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
-    } else if(locks[lockKey(staffId,dateStr)]!==false){
+    else
       setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
-    }
-  },[picker,setSchedule,staff,schedule,year,setLocks,locks]);
-
-
+  },[picker,setSchedule,setLocks]);
 
   const handleToggleLock=useCallback(()=>{
     if(!picker) return;
-    const {staffId,dateStr}=picker;
-    const k=lockKey(staffId,dateStr);
-    const currentShift=(schedule[staffId]||{})[dateStr];
-    if(locks[k]&&(currentShift==="vacation"||currentShift==="sick")){
-      setUnavailWarn("⚠️ Vakantie en ziekte kunnen enkel ontgrendeld worden door de shift te wijzigen.");
-      setTimeout(()=>setUnavailWarn(null),4000);
-      return;
-    }
-    // Expliciet false = bewust ontgrendeld, undefined/true = normaal gedrag
-    setLocks(prev=>({...prev,[k]:prev[k]?false:true}));
-  },[picker,setLocks,schedule,locks,setUnavailWarn]);
+    const k=lockKey(picker.staffId,picker.dateStr);
+    setLocks(prev=>({...prev,[k]:!prev[k]}));
+  },[picker,setLocks]);
 
-
-
-  // Coverage
   const coverage=dates.map(date=>{
     const ds=toDS(date);
     const demand=getDayDemand(ds,settings,holidays,vacations);
-    let morning=0,evening=0;
-    staff.forEach(s=>{       const sh=(schedule[s.id]||{})[ds];       const disp=getShiftDisplay(sh||"off");       if(disp.hours>0 && disp.startHour<17) morning++;       if(disp.hours>0 && disp.startHour>=17) evening++;     });
-    return{morning,evening,demMorning:demand.morning,demEvening:demand.evening,ds};
-  });
-
-  // Fatigue conflicts
-  const conflicts=[];
-  staff.forEach(s=>{
-    dates.forEach((date,i)=>{
-      if(i===0) return;
-      const ds=toDS(date); const sh=(schedule[s.id]||{})[ds];
-      const prevDs=toDS(dates[i-1]); const prevSh=(schedule[s.id]||{})[prevDs];
-      if((prevSh==="evening"||prevSh==="night")&&sh==="morning") conflicts.push({staffId:s.id,dateStr:ds});
+    let dag=0,avond=0;
+    staff.forEach(s=>{ const sh=(schedule[s.id]||{})[ds];
+      if(sh==="dag") dag++;
+      if(sh==="avond"||sh==="nacht") avond++;
     });
+    return{ds,dag,avond,demDag:demand.morning,demAvond:demand.evening};
   });
 
-  // ALERTS (interactive)
   const alerts=[];
   coverage.forEach(c=>{
     const date=new Date(c.ds); const di=(date.getDay()+6)%7;
-    if(c.morning<c.demMorning) alerts.push({msg:`Onderbezetting dag: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.morning}/${c.demMorning})`,ds:c.ds,type:"under"});
-    if(c.evening<c.demEvening) alerts.push({msg:`Onderbezetting avond: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.evening}/${c.demEvening})`,ds:c.ds,type:"under"});
-    if(c.morning>c.demMorning+3) alerts.push({msg:`Overbezetting dag: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1}`,ds:c.ds,type:"over"});
-  });
-  conflicts.forEach(c=>{
-    const s=staff.find(x=>x.id===c.staffId);
-    const date=new Date(c.dateStr);
-    alerts.push({msg:`Rusttijd conflict: ${s?.name} op ${date.getDate()}/${date.getMonth()+1}`,ds:c.dateStr,type:"fatigue"});
+    if(c.dag<c.demDag)   alerts.push({msg:`Dag tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.dag}/${c.demDag})`,ds:c.ds});
+    if(c.avond<c.demAvond) alerts.push({msg:`Avond tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.avond}/${c.demAvond})`,ds:c.ds});
   });
   const [alertsOpen,setAlertsOpen]=useState(false);
-
-  const regularStaff=staff.filter(s=>!s.isFlexijob);
-  const flexiStaff=staff.filter(s=>s.isFlexijob);
 
   const renderRow=(s)=>(
     <tr key={s.id}>
@@ -880,22 +477,17 @@ const handleSelect=useCallback((shiftId)=>{
       {dates.map((d,i)=>{
         const ds=toDS(d);
         const shiftId=(schedule[s.id]||{})[ds]||"off";
-        const shift=getShiftDisplay(shiftId);
-        const rawLock=locks[lockKey(s.id,ds)];
-const isLocked=rawLock===true;
-const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate);
-const locked=isLocked||isPastLock;
-
-        const isoWeek=getISOWeek(d);
-        const unavail=!s.isFlexijob&&!isAvailOnDate(s,ds,isoWeek)&&!["off","vacation","sick"].includes(shiftId);
+        const shift=getShift(shiftId);
+        const isLocked=!!locks[lockKey(s.id,ds)];
+        const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate+"T23:59:59");
+        const locked=isLocked||isPastLock;
         return(
           <td key={i} style={{padding:3}}>
             <div className={`shift-cell${locked?" locked":""}`}
-              style={{background:shift.bg,borderLeft:`3px solid ${unavail?"#f59e0b":shift.color}`,opacity:locked?0.85:1}}
-              onClick={e=>handleShiftClick(e,s.id,ds,locked)}>
-              <div className="shift-label" style={{color:unavail?"#f59e0b":shift.color}}>{shift.label}</div>
+              style={{background:shift.bg,borderLeft:`3px solid ${shift.color}`,opacity:locked?.85:1}}
+              onClick={e=>handleClick(e,s.id,ds,locked)}>
+              <div className="shift-label" style={{color:shift.color}}>{shift.label}</div>
               {shift.time&&<div className="shift-time">{shift.time}</div>}
-              {unavail&&<div className="shift-conflict">⚠️</div>}
             </div>
           </td>
         );
@@ -903,24 +495,24 @@ const locked=isLocked||isPastLock;
     </tr>
   );
 
+  const regular=staff.filter(s=>!s.isFlexijob);
+  const flexi=staff.filter(s=>s.isFlexijob);
+
   return(
     <div>
-      {unavailWarn&&<div className="warn-banner">⚠️ {unavailWarn}</div>}
+      {warn&&<div className="warn-banner">⚠️ {warn}</div>}
       {alerts.length>0&&(
         <div style={{marginBottom:8}}>
           <div className="alert-banner" style={{marginBottom:0,borderRadius:alertsOpen?"8px 8px 0 0":"8px"}} onClick={()=>setAlertsOpen(o=>!o)}>
             🔴 <strong>Waarschuwingen ({alerts.length})</strong>
-            <span style={{marginLeft:"auto",fontSize:12}}>{alertsOpen?"▲":"▼"}</span>
+            <span style={{marginLeft:"auto"}}>{alertsOpen?"▲":"▼"}</span>
           </div>
           {alertsOpen&&(
-            <div style={{background:"#7f1d1d18",border:"1px solid #7f1d1d",borderTop:"none",borderRadius:"0 0 8px 8px",overflow:"hidden"}}>
+            <div style={{background:"#7f1d1d18",border:"1px solid #7f1d1d",borderTop:"none",borderRadius:"0 0 8px 8px"}}>
               {alerts.map((a,i)=>(
-                <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 14px",fontSize:12,color:"#fca5a5",borderTop:i>0?"1px solid #7f1d1d30":"none",cursor:"pointer",transition:"background .12s"}}
-                  onMouseEnter={e=>e.currentTarget.style.background="#7f1d1d30"}
-                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}
-                  onClick={()=>onNavigateAlert&&onNavigateAlert(a.ds,a)}>
-                  {a.type==="fatigue"?"😴":a.type==="over"?"📈":"🔴"} {a.msg}
-                  <span style={{marginLeft:"auto",fontSize:10,opacity:.6}}>→</span>
+                <div key={i} style={{padding:"7px 14px",fontSize:12,color:"#fca5a5",borderTop:i>0?"1px solid #7f1d1d30":"none",cursor:"pointer"}}
+                  onClick={()=>onNavigateAlert&&onNavigateAlert(a.ds)}>
+                  🔴 {a.msg} <span style={{opacity:.6,fontSize:10}}>→</span>
                 </div>
               ))}
             </div>
@@ -928,9 +520,10 @@ const locked=isLocked||isPastLock;
         </div>
       )}
       <div className="legend">
-        {Object.values(SHIFTS).map(s=>(<div key={s.id} className="legend-item"><div className="legend-dot" style={{background:s.color}}/>{s.label}</div>))}
-        <div className="legend-item"><div className="legend-dot" style={{background:"#3b82f6"}}/> 🔒 Gelockt</div>
-        {lockDate&&<span className="lock-date-badge">🔒 Globaal gelockt tot {lockDate}</span>}
+        {["dag","avond","nacht","off","vacation","sick"].map(id=>{ const s=getShift(id); return(
+          <div key={id} className="legend-item"><div className="legend-dot" style={{background:s.color}}/>{s.label}</div>
+        );})}
+        {lockDate&&<span className="lock-date-badge">🔒 gelockt tot {lockDate}</span>}
       </div>
       <div style={{overflowX:"auto"}}>
         <table className="week-grid">
@@ -938,32 +531,28 @@ const locked=isLocked||isPastLock;
             <tr>
               <th style={{minWidth:148,textAlign:"left"}}>Personeel</th>
               {dates.map((d,i)=>{
-                const ds=toDS(d);
-                const isHol=isHoliday(ds,holidays); const isVac=isSchoolVacation(ds,vacations);
-                const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate);
+                const ds=toDS(d); const isPL=lockDate&&new Date(ds)<=new Date(lockDate+"T23:59:59");
                 return(
-                  <th key={i} className={isWeekend(d)?"weekend":""} style={{opacity:isPastLock?0.5:1}}>
+                  <th key={i} className={isWeekend(d)?"weekend":""} style={{opacity:isPL?.5:1}}>
                     {DAYS_NL[i]}<br/>
                     <span style={{fontFamily:"'IBM Plex Mono',monospace",fontWeight:400,fontSize:10}}>{d.getDate()}/{d.getMonth()+1}</span>
-                    {isHol&&" 🎉"}{isVac&&" 🏖"}{isPastLock&&" 🔒"}
+                    {isHoliday(ds,holidays)&&" 🎉"}{isSchoolVacation(ds,vacations)&&" 🏖"}{isPL&&" 🔒"}
                   </th>
                 );
               })}
             </tr>
           </thead>
           <tbody>
-            {regularStaff.map(renderRow)}
-            {flexiStaff.length>0&&(
-              <tr><td colSpan={8} style={{background:"#0f172a",padding:"4px 8px",fontSize:10,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.1em"}}>Flexijobbers</td></tr>
-            )}
-            {flexiStaff.map(renderRow)}
+            {regular.map(renderRow)}
+            {flexi.length>0&&<tr><td colSpan={8} style={{background:"#0f172a",padding:"4px 8px",fontSize:10,color:"#6b7280",textTransform:"uppercase",letterSpacing:".1em"}}>Flexijobbers</td></tr>}
+            {flexi.map(renderRow)}
             <tr className="coverage-row">
-              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Dag bezetting</td>
-              {coverage.map((c,i)=>(<td key={i}><span className={c.morning>=c.demMorning?"coverage-ok":c.morning>=c.demMorning-1?"coverage-warn":"coverage-bad"}>{c.morning}/{c.demMorning}</span></td>))}
+              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Dag</td>
+              {coverage.map((c,i)=>(<td key={i}><span className={c.dag>=c.demDag?"coverage-ok":c.dag>=c.demDag-1?"coverage-warn":"coverage-bad"}>{c.dag}/{c.demDag}</span></td>))}
             </tr>
             <tr className="coverage-row">
-              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Avond bezetting</td>
-              {coverage.map((c,i)=>(<td key={i}><span className={c.evening>=c.demEvening?"coverage-ok":c.evening>=c.demEvening-1?"coverage-warn":"coverage-bad"}>{c.evening}/{c.demEvening}</span></td>))}
+              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Avond</td>
+              {coverage.map((c,i)=>(<td key={i}><span className={c.avond>=c.demAvond?"coverage-ok":c.avond>=c.demAvond-1?"coverage-warn":"coverage-bad"}>{c.avond}/{c.demAvond}</span></td>))}
             </tr>
           </tbody>
         </table>
@@ -978,12 +567,11 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
   const [selectedDs,setSelectedDs]=useState(null);
   const months=Array.from({length:12},(_,m)=>{
     const days=[]; const firstDay=new Date(year,m,1);
-    let startDow=(firstDay.getDay()+6)%7;
-    for(let i=0;i<startDow;i++) days.push(null);
+    let sd=(firstDay.getDay()+6)%7; for(let i=0;i<sd;i++) days.push(null);
     const dim=new Date(year,m+1,0).getDate();
     for(let d=1;d<=dim;d++){
       const date=new Date(year,m,d); const ds=toDS(date);
-      let cnt=0; staff.forEach(s=>{ const sh=(schedule[s.id]||{})[ds]; if(sh&&sh!=="off"&&sh!=="vacation"&&sh!=="sick") cnt++; });
+      let cnt=0; staff.forEach(s=>{ const sh=(schedule[s.id]||{})[ds]; if(sh&&!["off","vacation","sick"].includes(sh)) cnt++; });
       const demand=getDayDemand(ds,settings,holidays,vacations);
       days.push({d,ds,cnt,min:demand.morning+demand.evening,isHol:isHoliday(ds,holidays),isVac:isSchoolVacation(ds,vacations),isWE:isWeekend(date)});
     }
@@ -1001,9 +589,12 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
               const ratio=day.cnt/Math.max(day.min,1);
               const bg=day.isHol?"#c9a84c40":day.isVac?"#22c55e30":day.isWE?"#3b82f620":ratio<0.8?"#ef444430":ratio<1?"#f59e0b30":"#22c55e20";
               const border=ratio<0.8?"1px solid #ef4444":ratio<1?"1px solid #f59e0b":"1px solid transparent";
-              const isSelected=selectedDs===day.ds;
-              return(<div key={day.d} className="day-dot" onClick={()=>{setSelectedDs(day.ds);onDayClick&&onDayClick(day.ds);}}
-                style={{background:isSelected?"var(--gold)":bg,border:isSelected?"2px solid #fff":border,color:isSelected?"#000":"var(--text-dim)",fontSize:8,cursor:"pointer",transform:isSelected?"scale(1.2)":"",transition:"all .15s",zIndex:isSelected?1:0,position:"relative"}}
+              const isSel=selectedDs===day.ds;
+              return(<div key={day.d} className="day-dot"
+                onClick={()=>{setSelectedDs(day.ds);onDayClick&&onDayClick(day.ds);}}
+                style={{background:isSel?"var(--gold)":bg,border:isSel?"2px solid #fff":border,
+                  color:isSel?"#000":"var(--text-dim)",fontSize:8,cursor:"pointer",
+                  transform:isSel?"scale(1.2)":"",transition:"all .15s",position:"relative",zIndex:isSel?1:0}}
                 title={`${day.ds}: ${day.cnt} staff`}>{day.d}</div>);
             })}
           </div>
@@ -1014,114 +605,52 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
 }
 
 // ─── STAFF STATS ──────────────────────────────────────────────────────────────
-function StaffStats({staff, schedule, year, holidays}) {
-  const regular  = staff.filter(s => !s.isFlexijob);
-  const computed = regular.map(s => {
-    let totalHours = 0, weekendShifts = 0, nightShifts = 0, holidayShifts = 0, vacUsed = 0;
-    const entries = schedule[s.id] || {};
-
-    Object.entries(entries).forEach(([ds, shiftId]) => {
-      if (!ds.startsWith(String(year))) return;
-      if (shiftId === "vacation") { vacUsed++; return; }
-      if (!shiftId || shiftId === "off" || shiftId === "sick") return;
-      const disp = getShiftDisplay(shiftId);
-      if (!disp || disp.hours === 0) return;
-      totalHours += disp.hours;
-      const date = new Date(ds);
-      if (isWeekend(date))                            weekendShifts++;
-      if (disp.startHour >= 21) nightShifts++;
-      if (isHoliday(ds, holidays))                    holidayShifts++;
+function StaffStats({staff,schedule,year,holidays}){
+  const regular=staff.filter(s=>!s.isFlexijob);
+  const computed=regular.map(s=>{
+    let totalHours=0,weekendShifts=0,nightShifts=0,holidayShifts=0,vacUsed=0,workDays=0;
+    Object.entries(schedule[s.id]||{}).forEach(([ds,sid])=>{
+      if(!ds.startsWith(String(year))) return;
+      if(sid==="vacation"){ vacUsed++; return; }
+      const sh=getShift(sid); if(sh.hours===0) return;
+      totalHours+=sh.hours; workDays++;
+      if(isWeekend(new Date(ds))) weekendShifts++;
+      if(sh.startHour>=21) nightShifts++;
+      if(isHoliday(ds,holidays)) holidayShifts++;
     });
-
-    const targetHours     = s.fte * 38 * 52;
-    const hoursDiff       = totalHours - targetHours;
-    const diffPct         = targetHours > 0 ? hoursDiff / targetHours : 0;
-    const withinTolerance = Math.abs(diffPct) <= 0.02;
-    const vacRemaining    = s.vacationDays - vacUsed;
-    const fatigueScore    = Math.min(100, (nightShifts / 120) * 100);
-
-    return { ...s, totalHours, weekendShifts, nightShifts, holidayShifts,
-             targetHours, hoursDiff, diffPct, withinTolerance,
-             fatigueScore, vacUsed, vacRemaining };
+    const targetHours=s.fte*38*52;
+    const vr=vacUsed/Math.max(s.vacationDays,1);
+    const hr=totalHours/Math.max(targetHours,1);
+    const fatigueScore=Math.min(100,(nightShifts/120)*100);
+    return{...s,totalHours,weekendShifts,nightShifts,holidayShifts,targetHours,vacUsed,vr,hr,fatigueScore,workDays};
   });
-
-  return (
+  return(
     <div className="stats-grid">
-      {computed.map(s => {
-        const fc = s.fatigueScore > 66 ? "#ef4444" : s.fatigueScore > 33 ? "#f59e0b" : "#22c55e";
-        const hc = s.withinTolerance ? "#22c55e" : Math.abs(s.diffPct) < 0.10 ? "#f59e0b" : "#ef4444";
-        const vr = s.vacUsed / Math.max(s.vacationDays, 1);
-        const vc = vr > 1 ? "over" : vr > 0.8 ? "warn" : "";
-        const diffLabel = s.hoursDiff > 0 ? `+${Math.round(s.hoursDiff)}u` : `${Math.round(s.hoursDiff)}u`;
-
-        return (
+      {computed.map(s=>{
+        const fc=s.fatigueScore>66?"#ef4444":s.fatigueScore>33?"#f59e0b":"#22c55e";
+        const hc=Math.abs(s.hr-1)<0.05?"#22c55e":Math.abs(s.hr-1)<0.15?"#f59e0b":"#ef4444";
+        const vc=s.vr>1?"over":s.vr>0.8?"warn":"";
+        return(
           <div key={s.id} className="stat-card">
             <div className="stat-card-header">
               <div style={{width:10,height:10,borderRadius:3,background:s.color,flexShrink:0}}/>
-              <div>
-                <div className="stat-name">{s.name}</div>
-                <div className="stat-fte">
-                  {CONTRACT_TYPES.find(c => c.value === s.fte)?.label || `${Math.round(s.fte*100)}%`}
-                </div>
-              </div>
+              <div><div className="stat-name">{s.name}</div>
+              <div className="stat-fte">{CONTRACT_TYPES.find(c=>c.value===s.fte)?.label||`${Math.round(s.fte*100)}%`}</div></div>
             </div>
-
-            {/* Uren blok */}
             <div style={{background:"var(--surface3)",borderRadius:7,padding:"10px 12px",marginBottom:8}}>
-              <div className="stat-row">
-                <span>Verwacht (jaar)</span>
-                <span className="stat-val">{Math.round(s.targetHours)}u</span>
-              </div>
-              <div className="stat-row">
-                <span>Gepland</span>
-                <span className="stat-val" style={{color:hc}}>{Math.round(s.totalHours)}u</span>
-              </div>
-              <div className="stat-row">
-                <span>Verschil</span>
-                <span className="stat-val" style={{color:hc}}>
-                  {diffLabel}
-                  {s.withinTolerance
-                    ? <span style={{fontSize:10,marginLeft:4,color:"#22c55e"}}>✓ binnen ±2%</span>
-                    : <span style={{fontSize:10,marginLeft:4,color:"#ef4444"}}>✗ buiten ±2%</span>
-                  }
-                </span>
-              </div>
-              {/* Voortgangsbalk */}
-              <div style={{height:6,borderRadius:3,background:"var(--border)",overflow:"hidden",marginTop:8}}>
-                <div style={{
-                  height:"100%", borderRadius:3, background:hc,
-                  width:`${Math.min(100, (s.totalHours / Math.max(s.targetHours,1)) * 100)}%`,
-                  transition:"width .4s"
-                }}/>
-              </div>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"var(--text-dim)",marginTop:3}}>
-                <span>0u</span>
-                <span style={{color:"var(--gold)"}}>doel: {Math.round(s.targetHours)}u</span>
-                <span>{Math.round(s.targetHours * 1.02)}u</span>
+              <div className="stat-row"><span>Gepland</span><span className="stat-val" style={{color:hc}}>{Math.round(s.totalHours)}u / {Math.round(s.targetHours)}u</span></div>
+              <div className="stat-row"><span>Werkdagen</span><span className="stat-val">{s.workDays}</span></div>
+              <div style={{height:5,borderRadius:3,background:"var(--border)",overflow:"hidden",marginTop:8}}>
+                <div style={{height:"100%",borderRadius:3,background:hc,width:`${Math.min(100,s.hr*100)}%`,transition:"width .4s"}}/>
               </div>
             </div>
-
-            <div className="stat-row"><span>Weekend shifts</span><span className="stat-val">{s.weekendShifts}</span></div>
-            <div className="stat-row"><span>Nachtdiensten</span><span className="stat-val">{s.nightShifts}</span></div>
+            <div className="stat-row"><span>Weekend</span><span className="stat-val">{s.weekendShifts}</span></div>
+            <div className="stat-row"><span>Nacht</span><span className="stat-val">{s.nightShifts}</span></div>
             <div className="stat-row"><span>Feestdagen</span><span className="stat-val">{s.holidayShifts}</span></div>
-            <div className="stat-row">
-              <span>Vakantie</span>
-              <span className="stat-val" style={{color: vr>1?"#ef4444":vr>0.8?"#f59e0b":"#22c55e"}}>
-                {s.vacUsed}/{s.vacationDays}
-              </span>
-            </div>
-            <div className="vac-bar">
-              <div className={`vac-fill ${vc}`} style={{width:`${Math.min(100,vr*100)}%`}}/>
-            </div>
-            <div className="stat-row" style={{marginTop:8}}>
-              <span>Vermoeidheid</span>
-              <span className="stat-val" style={{color:fc}}>
-                {s.fatigueScore>66?"🔴 Hoog":s.fatigueScore>33?"🟡 Medium":"🟢 Laag"}
-              </span>
-            </div>
-            <div className="fatigue-bar">
-              <div className="fatigue-fill" style={{width:`${s.fatigueScore}%`,background:fc}}/>
-            </div>
+            <div className="stat-row"><span>Vakantie</span><span className="stat-val" style={{color:s.vr>1?"#ef4444":s.vr>0.8?"#f59e0b":"#22c55e"}}>{s.vacUsed}/{s.vacationDays}</span></div>
+            <div className="vac-bar"><div className={`vac-fill ${vc}`} style={{width:`${Math.min(100,s.vr*100)}%`}}/></div>
+            <div className="stat-row" style={{marginTop:8}}><span>Vermoeidheid</span><span className="stat-val" style={{color:fc}}>{s.fatigueScore>66?"🔴 Hoog":s.fatigueScore>33?"🟡 Medium":"🟢 Laag"}</span></div>
+            <div className="fatigue-bar"><div className="fatigue-fill" style={{width:`${s.fatigueScore}%`,background:fc}}/></div>
           </div>
         );
       })}
@@ -1129,108 +658,87 @@ function StaffStats({staff, schedule, year, holidays}) {
   );
 }
 
-
 // ─── STAFF MANAGER ────────────────────────────────────────────────────────────
 function StaffManager({staff,setStaff,schedule,year}){
   const [showModal,setShowModal]=useState(false);
   const [editing,setEditing]=useState(null);
-  const [form,setForm]=useState({name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true});
-
-  const openAdd=()=>{ setEditing(null); setForm({name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true}); setShowModal(true); };
-  const openEdit=(s)=>{ setEditing(s.id); setForm({name:s.name,fte:s.fte,color:s.color,vacationDays:s.vacationDays,availableDays:[...s.availableDays],partTimeMode:s.partTimeMode||"spread",isFlexijob:s.isFlexijob||false,autoSchedule:s.autoSchedule!==false}); setShowModal(true); };
-  const handleFteChange=(v)=>{ const f=parseFloat(v); setForm(x=>({...x,fte:f,vacationDays:FTE_VACATION[f]??Math.round(24*f)})); };
-  const toggleDay=(day)=>{ setForm(f=>({...f,availableDays:f.availableDays.includes(day)?f.availableDays.filter(d=>d!==day):[...f.availableDays,day]})); };
-  const save=()=>{ if(!form.name.trim()) return; if(editing){ setStaff(p=>p.map(s=>s.id===editing?{...s,...form,fte:parseFloat(form.fte)}:s)); } else { setStaff(p=>[...p,{id:Date.now(),...form,fte:parseFloat(form.fte)}]); } setShowModal(false); };
+  const def={name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true};
+  const [form,setForm]=useState(def);
+  const openAdd=()=>{setEditing(null);setForm(def);setShowModal(true);};
+  const openEdit=(s)=>{setEditing(s.id);setForm({name:s.name,fte:s.fte,color:s.color,vacationDays:s.vacationDays,availableDays:[...s.availableDays],partTimeMode:s.partTimeMode||"spread",isFlexijob:s.isFlexijob||false,autoSchedule:s.autoSchedule!==false});setShowModal(true);};
+  const handleFteChange=(v)=>{const f=parseFloat(v);setForm(x=>({...x,fte:f,vacationDays:FTE_VACATION[f]??Math.round(24*f)}));};
+  const toggleDay=(day)=>setForm(f=>({...f,availableDays:f.availableDays.includes(day)?f.availableDays.filter(d=>d!==day):[...f.availableDays,day]}));
+  const save=()=>{if(!form.name.trim())return;if(editing){setStaff(p=>p.map(s=>s.id===editing?{...s,...form,fte:parseFloat(form.fte)}:s));}else{setStaff(p=>[...p,{id:Date.now(),...form,fte:parseFloat(form.fte)}]);}setShowModal(false);};
   const remove=(id)=>setStaff(p=>p.filter(s=>s.id!==id));
-
-  const regular=staff.filter(s=>!s.isFlexijob);
-  const flexi=staff.filter(s=>s.isFlexijob);
-
+  const regular=staff.filter(s=>!s.isFlexijob); const flexi=staff.filter(s=>s.isFlexijob);
   const renderSection=(list,title)=>(
     <>
-      <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:"0.1em",color:"var(--text-dim)",margin:"16px 0 8px"}}>{title}</div>
+      <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:".1em",color:"var(--text-dim)",margin:"16px 0 8px"}}>{title}</div>
       <table className="staff-table">
-        <thead><tr><th>Naam</th><th>Contract</th><th>Vakantie</th><th>Beschikbaar</th><th>Auto</th><th>Acties</th></tr></thead>
-        <tbody>
-          {list.map(s=>{
-            const vacUsed=countVacDays(s.id,schedule,year);
-            const vacRem=s.vacationDays-vacUsed;
-            const cl=CONTRACT_TYPES.find(c=>c.value===s.fte)?.label||`${Math.round(s.fte*100)}%`;
-            return(
-              <tr key={s.id}>
-                <td><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:10,height:10,borderRadius:3,background:s.color}}/>{s.name}</div></td>
-                <td><span className="tag" style={{background:s.isFlexijob?"#1f2937":"#1e3a5f",color:s.isFlexijob?"#9ca3af":"#60a5fa"}}>{s.isFlexijob?"Flexijob":cl}</span></td>
-                <td>{s.isFlexijob?<span style={{color:"var(--text-dim)",fontSize:12}}>—</span>:<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:vacRem<0?"#ef4444":vacRem===0?"#f59e0b":"#22c55e"}}>{vacUsed}/{s.vacationDays}</span>}</td>
-                <td><span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:"var(--text-dim)"}}>{s.availableDays.map(d=>DAYS_NL[d]).join(",")}</span></td>
-                <td><span style={{fontSize:12}}>{s.autoSchedule!==false?"🟢 Auto":"✋ Manueel"}</span></td>
-                <td><div style={{display:"flex",gap:6}}><button className="btn" onClick={()=>openEdit(s)}>✏️</button><button className="btn btn-danger" onClick={()=>remove(s.id)}>🗑</button></div></td>
-              </tr>
-            );
-          })}
-        </tbody>
+        <thead><tr><th>Naam</th><th>Contract</th><th>Vakantie</th><th>Dagen</th><th>Auto</th><th></th></tr></thead>
+        <tbody>{list.map(s=>{
+          const vu=countVacDays(s.id,schedule,year);
+          return(<tr key={s.id}>
+            <td><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:10,height:10,borderRadius:3,background:s.color}}/>{s.name}</div></td>
+            <td><span className="tag" style={{background:s.isFlexijob?"#1f2937":"#1e3a5f",color:s.isFlexijob?"#9ca3af":"#60a5fa"}}>{s.isFlexijob?"Flexijob":CONTRACT_TYPES.find(c=>c.value===s.fte)?.label}</span></td>
+            <td>{s.isFlexijob?<span style={{color:"var(--text-dim)"}}>—</span>:<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:vu>s.vacationDays?"#ef4444":"#22c55e"}}>{vu}/{s.vacationDays}</span>}</td>
+            <td><span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:"var(--text-dim)"}}>{s.availableDays.map(d=>DAYS_NL[d]).join(",")}</span></td>
+            <td><span>{s.autoSchedule!==false?"🟢":"✋"}</span></td>
+            <td><div style={{display:"flex",gap:6}}><button className="btn" onClick={()=>openEdit(s)}>✏️</button><button className="btn btn-danger" onClick={()=>remove(s.id)}>🗑</button></div></td>
+          </tr>);
+        })}</tbody>
       </table>
     </>
   );
-
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <div style={{fontSize:13,color:"var(--text-dim)"}}>{regular.length} vaste mw • {regular.reduce((a,s)=>a+s.fte,0).toFixed(1)} FTE • {flexi.length} flexijobbers</div>
+        <div style={{fontSize:13,color:"var(--text-dim)"}}>{regular.length} vaste • {regular.reduce((a,s)=>a+s.fte,0).toFixed(1)} FTE • {flexi.length} flex</div>
         <button className="btn btn-primary" onClick={openAdd}>+ Toevoegen</button>
       </div>
       {renderSection(regular,"Vaste medewerkers")}
       {flexi.length>0&&renderSection(flexi,"Flexijobbers")}
-
       {showModal&&(
         <div className="modal-overlay" onClick={()=>setShowModal(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div className="modal-title">{editing?"Bewerken":"Toevoegen"}</div>
-            <div className="form-row">
-              <label className="form-label">Type</label>
+            <div className="form-row"><label className="form-label">Type</label>
               <div style={{display:"flex",gap:8}}>
                 <button className={`btn ${!form.isFlexijob?"btn-primary":""}`} style={{flex:1}} onClick={()=>setForm(f=>({...f,isFlexijob:false}))}>Vast</button>
                 <button className={`btn ${form.isFlexijob?"btn-flex":""}`} style={{flex:1}} onClick={()=>setForm(f=>({...f,isFlexijob:true,fte:0,vacationDays:0}))}>Flexijob</button>
               </div>
             </div>
-            <div className="form-row"><label className="form-label">Naam</label><input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Volledige naam"/></div>
-            {!form.isFlexijob&&(
-              <>
-                <div className="form-row"><label className="form-label">Contract</label>
-                  <select className="form-input" value={form.fte} onChange={e=>handleFteChange(e.target.value)}>
-                    {CONTRACT_TYPES.map(c=><option key={c.value} value={c.value}>{c.label}</option>)}
-                  </select>
-                </div>
-                <div className="form-row"><label className="form-label">Vakantiedagen</label>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    <button className="btn" style={{padding:"6px 12px",fontSize:16}} onClick={()=>setForm(f=>({...f,vacationDays:Math.max(0,f.vacationDays-1)}))}>−</button>
-                    <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:16,minWidth:32,textAlign:"center",color:"var(--gold)"}}>{form.vacationDays}</span>
-                    <button className="btn" style={{padding:"6px 12px",fontSize:16}} onClick={()=>setForm(f=>({...f,vacationDays:f.vacationDays+1}))}>+</button>
-                  </div>
-                </div>
-                {form.fte===0.5&&(
-                  <div className="form-row"><label className="form-label">Halftijdse regeling</label>
-                    <select className="form-input" value={form.partTimeMode} onChange={e=>setForm(f=>({...f,partTimeMode:e.target.value}))}>
-                      <option value="spread">Verspreid</option><option value="even">Even weken</option><option value="odd">Oneven weken</option>
-                    </select>
-                  </div>
-                )}
-              </>
-            )}
-            <div className="form-row">
-              <label className="form-label">Beschikbare dagen</label>
-              <div className="day-checks">
-                {DAYS_FULL.map((day,i)=>(
-                  <label key={i} className={`day-check ${form.availableDays.includes(i)?"active":""}`}>
-                    <input type="checkbox" checked={form.availableDays.includes(i)} onChange={()=>toggleDay(i)}/>{DAYS_NL[i]}
-                  </label>
-                ))}
+            <div className="form-row"><label className="form-label">Naam</label><input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
+            {!form.isFlexijob&&(<>
+              <div className="form-row"><label className="form-label">Contract</label>
+                <select className="form-input" value={form.fte} onChange={e=>handleFteChange(e.target.value)}>
+                  {CONTRACT_TYPES.map(c=><option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
               </div>
+              <div className="form-row"><label className="form-label">Vakantiedagen</label>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <button className="btn" style={{padding:"6px 12px"}} onClick={()=>setForm(f=>({...f,vacationDays:Math.max(0,f.vacationDays-1)}))}>−</button>
+                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:16,minWidth:32,textAlign:"center",color:"var(--gold)"}}>{form.vacationDays}</span>
+                  <button className="btn" style={{padding:"6px 12px"}} onClick={()=>setForm(f=>({...f,vacationDays:f.vacationDays+1}))}>+</button>
+                </div>
+              </div>
+              {form.fte===0.5&&(<div className="form-row"><label className="form-label">Halftijdse regeling</label>
+                <select className="form-input" value={form.partTimeMode} onChange={e=>setForm(f=>({...f,partTimeMode:e.target.value}))}>
+                  <option value="spread">Verspreid</option><option value="even">Even weken</option><option value="odd">Oneven weken</option>
+                </select>
+              </div>)}
+            </>)}
+            <div className="form-row"><label className="form-label">Beschikbare dagen</label>
+              <div className="day-checks">{DAYS_FULL.map((day,i)=>(
+                <label key={i} className={`day-check ${form.availableDays.includes(i)?"active":""}`}>
+                  <input type="checkbox" checked={form.availableDays.includes(i)} onChange={()=>toggleDay(i)}/>{DAYS_NL[i]}
+                </label>
+              ))}</div>
             </div>
-            <div className="form-row">
-              <label className="form-label">Automatisch inplannen</label>
+            <div className="form-row"><label className="form-label">Automatisch inplannen</label>
               <div style={{display:"flex",gap:8}}>
-                <button className={`btn ${form.autoSchedule?"btn-primary":""}`} style={{flex:1}} onClick={()=>setForm(f=>({...f,autoSchedule:true}))}>🟢 Automatisch</button>
-                <button className={`btn ${!form.autoSchedule?"btn-flex":""}`} style={{flex:1}} onClick={()=>setForm(f=>({...f,autoSchedule:false}))}>✋ Enkel manueel</button>
+                <button className={`btn ${form.autoSchedule?"btn-primary":""}`} style={{flex:1}} onClick={()=>setForm(f=>({...f,autoSchedule:true}))}>🟢 Auto</button>
+                <button className={`btn ${!form.autoSchedule?"btn-flex":""}`} style={{flex:1}} onClick={()=>setForm(f=>({...f,autoSchedule:false}))}>✋ Manueel</button>
               </div>
             </div>
             <div className="form-row"><label className="form-label">Kleur</label><input className="form-input" type="color" value={form.color} onChange={e=>setForm(f=>({...f,color:e.target.value}))} style={{height:40,padding:4}}/></div>
@@ -1245,106 +753,87 @@ function StaffManager({staff,setStaff,schedule,year}){
   );
 }
 
-
-
 // ─── SETTINGS VIEW ────────────────────────────────────────────────────────────
+const DEFAULT_SETTINGS={
+  minMorning:3, minEvening:6,
+  weekendMinMorning:4, weekendMinEvening:8,
+  vacMinMorning:4, vacMinEvening:8,
+  maxConsecNights:4, minRestAfterNights:2, maxConsecDays:5, minRestHours:11,
+};
+
 function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq,showToast}){
-  const [newHoliday,setNewHoliday]=useState("");
-  const [newVacName,setNewVacName]=useState("");
-  const [newVacStart,setNewVacStart]=useState("");
-  const [newVacEnd,setNewVacEnd]=useState("");
-  const [showGasInfo,setShowGasInfo]=useState(false);
+  const [newH,setNewH]=useState(""); const [nVN,setNVN]=useState(""); const [nVS,setNVS]=useState(""); const [nVE,setNVE]=useState("");
   const upd=(k,v)=>setSettings(s=>({...s,[k]:parseFloat(v)||v}));
   const freqLabels=["Nooit","Zelden","Normaal","Vaak"];
-
-return(
+  return(
     <div>
-      {showGasInfo&&<GasInfoModal onClose={()=>setShowGasInfo(false)}/>}
-
-      {/* Reset knop */}
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
-        <button className="btn btn-danger" onClick={()=>{
-          setSettings(DEFAULT_SETTINGS);
-          showToast("🔄 Instellingen gereset naar standaard");
-        }}>
-          🔄 Reset naar standaardinstellingen
-        </button>
+        <button className="btn btn-danger" onClick={()=>{setSettings(DEFAULT_SETTINGS);showToast("🔄 Reset naar standaard");}}>🔄 Reset</button>
       </div>
-
       <div className="settings-grid">
         <div className="settings-section">
           <div className="settings-title">⚙️ Bezettingsnormen</div>
-          {[["minMorning","Min. dag (normaal)"],["minEvening","Min. avond (normaal)"],["weekendMinMorning","Min. dag (weekend/vr)"],["weekendMinEvening","Min. avond (weekend/vr)"],["vacMinMorning","Min. dag (vakantie/feest)"],["vacMinEvening","Min. avond (vakantie/feest)"]].map(([k,l])=>(
-            <div key={k} className="form-row"><label className="form-label">{l}</label><input className="form-input" type="number" value={settings[k]} onChange={e=>upd(k,e.target.value)}/></div>
+          {[["minMorning","Min. dag (normaal)"],["minEvening","Min. avond (normaal)"],["weekendMinMorning","Min. dag (weekend)"],["weekendMinEvening","Min. avond (weekend)"],["vacMinMorning","Min. dag (vakantie/feest)"],["vacMinEvening","Min. avond (vakantie/feest)"]].map(([k,l])=>(
+            <div key={k} className="form-row"><label className="form-label">{l}</label><input className="form-input" type="number" value={settings[k]||0} onChange={e=>upd(k,e.target.value)}/></div>
           ))}
         </div>
         <div className="settings-section">
-          <div className="settings-title">😴 Vermoeidheid & Beperkingen</div>
-          {[["maxConsecNights","Max. opeenvolgende nachten"],["minRestAfterNights","Min. rustdagen na nachten"],["maxConsecDays","Max. opeenvolgende werkdagen"],["minRestHours","Min. rust tussen shifts (uur)"]].map(([k,l])=>(
-            <div key={k} className="form-row"><label className="form-label">{l}</label><input className="form-input" type="number" value={settings[k]} onChange={e=>upd(k,e.target.value)}/></div>
+          <div className="settings-title">😴 Beperkingen</div>
+          {[["maxConsecNights","Max. opeenvolgende nachten"],["minRestAfterNights","Min. rust na nachten"],["maxConsecDays","Max. opeenvolgende werkdagen"],["minRestHours","Min. rust tussen shifts (uur)"]].map(([k,l])=>(
+            <div key={k} className="form-row"><label className="form-label">{l}</label><input className="form-input" type="number" value={settings[k]||0} onChange={e=>upd(k,e.target.value)}/></div>
           ))}
         </div>
         <div className="settings-section">
           <div className="settings-title">🔒 Globale Lock Datum</div>
-          <div className="form-row">
-            <label className="form-label">Alles locken tot en met deze datum</label>
+          <div className="form-row"><label className="form-label">Alles locken tot en met</label>
             <input className="form-input" type="date" value={lockDate||""} onChange={e=>setLockDate(e.target.value||null)}/>
           </div>
-          {lockDate&&<div style={{marginTop:8,padding:10,background:"#78350f20",border:"1px solid #78350f",borderRadius:7,fontSize:12,color:"var(--yellow)"}}>
-            🔒 Alle shifts vóór en op {lockDate} zijn gelockt als historische data. Ze worden niet overschreven bij het genereren van een nieuw rooster.
-          </div>}
-          <button className="btn btn-danger" style={{marginTop:10}} onClick={()=>setLockDate(null)}>Lock datum verwijderen</button>
+          {lockDate&&<div style={{padding:10,background:"#78350f20",border:"1px solid #78350f",borderRadius:7,fontSize:12,color:"var(--yellow)",marginBottom:8}}>🔒 Historische data beschermd tot {lockDate}</div>}
+          <button className="btn btn-danger" onClick={()=>setLockDate(null)}>Verwijderen</button>
         </div>
         <div className="settings-section">
           <div className="settings-title">🎉 Feestdagen</div>
           <div style={{maxHeight:180,overflowY:"auto",marginBottom:10}}>
-            {holidays.map(h=>(
-              <div key={h} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:"1px solid var(--border)",fontSize:13}}>
-                <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{h}</span>
-                <button className="btn btn-danger" style={{padding:"2px 8px",fontSize:11}} onClick={()=>setHolidays(p=>p.filter(x=>x!==h))}>✕</button>
-              </div>
-            ))}
+            {holidays.map(h=>(<div key={h} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)",fontSize:12}}>
+              <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{h}</span>
+              <button className="btn btn-danger" style={{padding:"2px 8px",fontSize:11}} onClick={()=>setHolidays(p=>p.filter(x=>x!==h))}>✕</button>
+            </div>))}
           </div>
           <div style={{display:"flex",gap:6}}>
-            <input className="form-input" type="date" value={newHoliday} onChange={e=>setNewHoliday(e.target.value)} style={{flex:1}}/>
-            <button className="btn btn-primary" onClick={()=>{if(newHoliday){setHolidays(p=>[...new Set([...p,newHoliday])].sort());setNewHoliday("");}}}> + </button>
+            <input className="form-input" type="date" value={newH} onChange={e=>setNewH(e.target.value)} style={{flex:1}}/>
+            <button className="btn btn-primary" onClick={()=>{if(newH){setHolidays(p=>[...new Set([...p,newH])].sort());setNewH("");}}}> + </button>
           </div>
         </div>
         <div className="settings-section">
           <div className="settings-title">🏖 Schoolvakanties</div>
           <div style={{maxHeight:160,overflowY:"auto",marginBottom:10}}>
-            {vacations.map(v=>(
-              <div key={v.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:"1px solid var(--border)",fontSize:12}}>
-                <span><strong>{v.name}</strong><br/><span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:"var(--text-dim)"}}>{v.start} → {v.end}</span></span>
-                <button className="btn btn-danger" style={{padding:"2px 8px",fontSize:11}} onClick={()=>setVacations(p=>p.filter(x=>x.name!==v.name))}>✕</button>
-              </div>
-            ))}
+            {vacations.map(v=>(<div key={v.name} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)",fontSize:12}}>
+              <span><strong>{v.name}</strong><br/><span style={{fontSize:10,color:"var(--text-dim)"}}>{v.start} → {v.end}</span></span>
+              <button className="btn btn-danger" style={{padding:"2px 8px",fontSize:11}} onClick={()=>setVacations(p=>p.filter(x=>x.name!==v.name))}>✕</button>
+            </div>))}
           </div>
-          <div className="form-row"><label className="form-label">Naam</label><input className="form-input" value={newVacName} onChange={e=>setNewVacName(e.target.value)}/></div>
+          <div className="form-row"><label className="form-label">Naam</label><input className="form-input" value={nVN} onChange={e=>setNVN(e.target.value)}/></div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
-            <div><label className="form-label">Van</label><input className="form-input" type="date" value={newVacStart} onChange={e=>setNewVacStart(e.target.value)}/></div>
-            <div><label className="form-label">Tot</label><input className="form-input" type="date" value={newVacEnd} onChange={e=>setNewVacEnd(e.target.value)}/></div>
+            <div><label className="form-label">Van</label><input className="form-input" type="date" value={nVS} onChange={e=>setNVS(e.target.value)}/></div>
+            <div><label className="form-label">Tot</label><input className="form-input" type="date" value={nVE} onChange={e=>setNVE(e.target.value)}/></div>
           </div>
-          <button className="btn btn-primary" onClick={()=>{if(newVacName&&newVacStart&&newVacEnd){setVacations(p=>[...p,{name:newVacName,start:newVacStart,end:newVacEnd}]);setNewVacName("");setNewVacStart("");setNewVacEnd("");}}}> + Vakantie toevoegen</button>
+          <button className="btn btn-primary" onClick={()=>{if(nVN&&nVS&&nVE){setVacations(p=>[...p,{name:nVN,start:nVS,end:nVE}]);setNVN("");setNVS("");setNVE("");}}}>+ Toevoegen</button>
         </div>
         <div className="settings-section">
-          <div className="settings-title">💬 Motivatie berichten (Rami)</div>
+          <div className="settings-title">💬 Motivatie (Rami)</div>
           <div className="form-row">
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
               <input type="checkbox" checked={!motivatieEnabled} onChange={e=>setMotivatieEnabled(!e.target.checked)} style={{accentColor:"var(--gold)",width:16,height:16}}/>
-              <span className="form-label" style={{margin:0}}>Motivatie berichten uitschakelen</span>
+              <span className="form-label" style={{margin:0}}>Uitschakelen</span>
             </label>
           </div>
-          {motivatieEnabled&&(
-            <div className="form-row">
-              <label className="form-label">Frequentie</label>
-              <div className="slider-row">
-                <input type="range" min={0} max={3} value={motivatieFreq} onChange={e=>setMotivatieFreq(parseInt(e.target.value))}/>
-                <span style={{fontFamily:"'IBM Plex Mono',monospace",color:"var(--gold)",minWidth:50}}>{freqLabels[motivatieFreq]}</span>
-              </div>
-              <div className="freq-labels"><span>Nooit</span><span>Zelden</span><span>Normaal</span><span>Vaak</span></div>
+          {motivatieEnabled&&(<div className="form-row"><label className="form-label">Frequentie</label>
+            <div className="slider-row">
+              <input type="range" min={0} max={3} value={motivatieFreq} onChange={e=>setMotivatieFreq(parseInt(e.target.value))}/>
+              <span style={{fontFamily:"'IBM Plex Mono',monospace",color:"var(--gold)",minWidth:50}}>{freqLabels[motivatieFreq]}</span>
             </div>
-          )}
+            <div className="freq-labels"><span>Nooit</span><span>Zelden</span><span>Normaal</span><span>Vaak</span></div>
+          </div>)}
         </div>
       </div>
     </div>
@@ -1352,23 +841,21 @@ return(
 }
 
 // ─── STORAGE VIEW ─────────────────────────────────────────────────────────────
-function StorageView({onExport, onImport, onSaveToSheets, onLoadFromSheets}) {
-  return (
+function StorageView({onExport,onImport,onSaveToSheets,onLoadFromSheets}){
+  return(
     <div>
-      <div style={{marginBottom:20,padding:16,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10}}>
+      <div style={{marginBottom:16,padding:16,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10}}>
         <div style={{fontSize:13,color:"var(--gold)",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>☁️ Supabase Sync</div>
-        <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:12}}>Data wordt automatisch gesynchroniseerd tussen alle apparaten via Supabase.</div>
+        <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:12}}>Automatische sync tussen alle apparaten.</div>
         <div style={{display:"flex",gap:8}}>
-          <button className="btn btn-primary" onClick={onSaveToSheets} style={{flex:1,justifyContent:"center"}}>⬆ Opslaan naar Supabase</button>
-          <button className="btn" onClick={onLoadFromSheets} style={{flex:1,justifyContent:"center"}}>⬇ Laden van Supabase</button>
+          <button className="btn btn-primary" onClick={onSaveToSheets} style={{flex:1,justifyContent:"center"}}>⬆ Opslaan</button>
+          <button className="btn" onClick={onLoadFromSheets} style={{flex:1,justifyContent:"center"}}>⬇ Laden</button>
         </div>
       </div>
-
-      <div style={{marginBottom:20,padding:16,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10}}>
+      <div style={{padding:16,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10}}>
         <div style={{fontSize:13,color:"var(--gold)",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>💾 Lokale Backup</div>
-        <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:12}}>Export of importeer een volledige backup als JSON bestand.</div>
         <div style={{display:"flex",gap:8}}>
-          <button className="btn btn-primary" onClick={onExport}>⬇ Export JSON backup</button>
+          <button className="btn btn-primary" onClick={onExport}>⬇ Export JSON</button>
           <label className="btn" style={{cursor:"pointer"}}>⬆ Import JSON<input type="file" accept=".json" style={{display:"none"}} onChange={onImport}/></label>
         </div>
       </div>
@@ -1377,30 +864,12 @@ function StorageView({onExport, onImport, onSaveToSheets, onLoadFromSheets}) {
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-const DEFAULT_SETTINGS={
-  minMorning:3,
-  minEvening:6,
-  minNight:10,
-  weekendMinMorning:4,
-  weekendMinEvening:8,
-  weekendMinNight:10,
-  vacMinMorning:4,
-  vacMinEvening:8,
-  vacMinNight:10,
-  maxConsecNights:4,
-  minRestAfterNights:2,
-  maxConsecDays:5,
-  minRestHours:11,
-};
-
-// Build year range 2026–2036+
 const YEAR_RANGE=Array.from({length:12},(_,i)=>2026+i);
+const LOADING_MSGS=["Even geduld, het casino ontwaakt... 🎰","De shifts worden geshuffeld... 🃏","Rami's planning machine staat op poten...","De kaarten worden geschud, zo klaar! 🂡"];
 
 export default function App(){
   const [view,setView]=useState("week");
-  const [weekNum,setWeekNum]=useState(()=>{
-    const now=new Date(); return getISOWeek(now);
-  });
+  const [weekNum,setWeekNum]=useState(()=>getISOWeek(new Date()));
   const [year,setYear]=useState(()=>load(SK.year,2026));
   const [staff,setStaff]=useState(()=>load(SK.staff,INITIAL_STAFF));
   const [schedule,setSchedule]=useState(()=>load(SK.schedule,{}));
@@ -1409,276 +878,150 @@ export default function App(){
   const [vacations,setVacations]=useState(()=>load(SK.vacations,VACATIONS_BY_YEAR[2026]||[]));
   const [locks,setLocks]=useState(()=>load(SK.locks,{}));
   const [lockDate,setLockDate]=useState(()=>load("co3_lockdate",null));
-  const [generating,setGenerating]=useState(false); const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [generating,setGenerating]=useState(false);
+  const [sidebarOpen,setSidebarOpen]=useState(false);
   const [toast,setToast]=useState(null);
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
-  const actionCount = useRef(0);
-  const isLoaded = useRef(false);
-  const [isAppReady, setIsAppReady] = useState(false); // ← toevoegen
+  const [isAppReady,setIsAppReady]=useState(false);
+  const actionCount=useRef(0);
+  const isLoaded=useRef(false);
+  const [loadingMsg]=useState(()=>LOADING_MSGS[Math.floor(Math.random()*LOADING_MSGS.length)]);
 
-  const LOADING_MESSAGES = [
-    "Neem ondertussen gerust een pintje uit de koelkast 🍺",
-    "De planner warmt zijn hersenen op...",
-    "Even geduld, het casino ontwaakt... 🎰",
-    "De shifts worden geshuffeld... 🃏",
-    "Rami's planning machine staat op poten...",
-    "Croupiers worden ingepland, even geduld... 🎲",
-    "De kaarten worden geschud, zo klaar! 🂡",
-    "Blackjack of rooster? Wij kiezen rooster. 👑",
-  ];
-  const [loadingMsg] = useState(
-    () => LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)]
-  );
+  // Auto-save lokaal
+  useEffect(()=>{ save(SK.staff,staff); },[staff]);
+  useEffect(()=>{ save(SK.schedule,schedule); },[schedule]);
+  useEffect(()=>{ save(SK.settings,settings); },[settings]);
+  useEffect(()=>{ save(SK.holidays,holidays); },[holidays]);
+  useEffect(()=>{ save(SK.vacations,vacations); },[vacations]);
+  useEffect(()=>{ save(SK.locks,locks); },[locks]);
+  useEffect(()=>{ save("co3_lockdate",lockDate); },[lockDate]);
+  useEffect(()=>{ save("co3_motiv_on",motivatieEnabled); },[motivatieEnabled]);
+  useEffect(()=>{ save("co3_motiv_freq",motivatieFreq); },[motivatieFreq]);
+  useEffect(()=>{ save(SK.year,year); },[year]);
 
-// Auto-save lokaal
-useEffect(()=>{ save(SK.staff,staff); },[staff]);
-useEffect(()=>{ save(SK.schedule,schedule); },[schedule]);
-useEffect(()=>{ save(SK.settings,settings); },[settings]);
-useEffect(()=>{ save(SK.holidays,holidays); },[holidays]);
-useEffect(()=>{ save(SK.vacations,vacations); },[vacations]);
-useEffect(()=>{ save(SK.locks,locks); },[locks]);
-useEffect(()=>{ save("co3_lockdate",lockDate); },[lockDate]);
-useEffect(()=>{ save("co3_motiv_on",motivatieEnabled); },[motivatieEnabled]);
-useEffect(()=>{ save("co3_motiv_freq",motivatieFreq); },[motivatieFreq]);
-useEffect(()=>{ save(SK.year,year); },[year]);
+  const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
 
-const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
-  // Motivatie trigger
-  const triggerMotivatieCheck=useCallback(()=>{
+  const triggerMotivatie=useCallback(()=>{
     if(!motivatieEnabled||motivatieFreq===0) return;
     actionCount.current++;
-    const thresholds=[0,15,8,4];
-    const threshold=thresholds[motivatieFreq]||10;
-    if(actionCount.current>=threshold){
-      actionCount.current=0;
-      const msg=MOTIVATIE[Math.floor(Math.random()*MOTIVATIE.length)];
-      showToast(msg,"motivatie");
-    }
+    const thresh=[0,15,8,4][motivatieFreq]||10;
+    if(actionCount.current>=thresh){ actionCount.current=0; showToast(MOTIVATIE[Math.floor(Math.random()*MOTIVATIE.length)],"motivatie"); }
   },[motivatieEnabled,motivatieFreq]);
 
   const handleYearChange=(y)=>{
-    const yi=parseInt(y);
-    setYear(yi);
+    const yi=parseInt(y); setYear(yi);
     if(HOLIDAYS_BY_YEAR[yi]) setHolidays(HOLIDAYS_BY_YEAR[yi]);
     if(VACATIONS_BY_YEAR[yi]) setVacations(VACATIONS_BY_YEAR[yi]);
-    setWeekNum(1);
-    showToast(`📅 Jaar ${yi} geladen.`);
-    triggerMotivatieCheck();
+    setWeekNum(1); showToast(`📅 Jaar ${yi} geladen.`);
   };
 
-  const handleSetSchedule=useCallback((fn)=>{
-    setSchedule(fn);
-    triggerMotivatieCheck();
-  },[triggerMotivatieCheck]);
-
   const handleNavigateAlert=useCallback((ds)=>{
-    const date=new Date(ds);
-    setYear(date.getFullYear());
-    const wk=getISOWeek(date);
-    setWeekNum(wk);
+    setYear(new Date(ds).getFullYear());
+    setWeekNum(getISOWeek(new Date(ds)));
     setView("week");
-    showToast(`📍 Genavigeerd naar week ${wk}, ${date.getDate()}/${date.getMonth()+1}/${date.getFullYear()}`);
+    showToast(`📍 Genavigeerd naar ${ds}`);
   },[]);
 
   const generateRoster=useCallback(()=>{
     setGenerating(true);
     setTimeout(()=>{
-      const {schedule:newSched}=generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate);
-      setSchedule(newSched);
+      const {schedule:ns}=generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate);
+      setSchedule(ns);
       setGenerating(false);
       showToast("✅ Rooster gegenereerd!");
-      triggerMotivatieCheck();
+      triggerMotivatie();
     },600);
-  },[staff,year,settings,holidays,vacations,schedule,locks,lockDate,triggerMotivatieCheck]);
+  },[staff,year,settings,holidays,vacations,schedule,locks,lockDate,triggerMotivatie]);
 
   const exportCSV=()=>{
-    const dates=[];
-    for(let m=0;m<12;m++){ const dim=new Date(year,m+1,0).getDate(); for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d))); }
-    const header=["Naam","Type","FTE",...dates].join(";");
-    const rows=staff.map(s=>{
-      const vals=dates.map(ds=>{ const sid=(schedule[s.id]||{})[ds]||"off"; return getShiftDisplay(sid).label||"Vrij"; });
-      return[s.name,s.isFlexijob?"Flexijob":"Vast",s.fte,...vals].join(";");
-    });
+    const dates=[]; for(let m=0;m<12;m++){const dim=new Date(year,m+1,0).getDate();for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d)));}
+    const header=["Naam","FTE",...dates].join(";");
+    const rows=staff.map(s=>[s.name,s.fte,...dates.map(ds=>getShift((schedule[s.id]||{})[ds]||"off").label)].join(";"));
     const blob=new Blob(["\uFEFF"+[header,...rows].join("\n")],{type:"text/csv;charset=utf-8;"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`rooster_${year}.csv`; a.click();
     showToast("📊 CSV geëxporteerd!");
   };
-
   const exportJSON=()=>{
-    const data={staff,schedule,settings,holidays,vacations,locks,lockDate,year,exportDate:new Date().toISOString()};
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const blob=new Blob([JSON.stringify({staff,schedule,settings,holidays,vacations,locks,lockDate,year},null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`casino_backup_${year}.json`; a.click();
     showToast("💾 Backup geëxporteerd!");
   };
-
-const importJSON=(e)=>{
+  const importJSON=(e)=>{
     const file=e.target.files[0]; if(!file) return;
     const reader=new FileReader();
     reader.onload=(ev)=>{
       try{
-        const data=JSON.parse(ev.target.result);
-        if(data.staff) setStaff(data.staff); if(data.schedule) setSchedule(data.schedule);
-        if(data.settings) setSettings(data.settings); if(data.holidays) setHolidays(data.holidays);
-        if(data.vacations) setVacations(data.vacations); if(data.locks) setLocks(data.locks);
-        if(data.lockDate) setLockDate(data.lockDate); if(data.year) setYear(data.year);
+        const d=JSON.parse(ev.target.result);
+        if(d.staff) setStaff(d.staff); if(d.schedule) setSchedule(d.schedule);
+        if(d.settings) setSettings(d.settings); if(d.holidays) setHolidays(d.holidays);
+        if(d.vacations) setVacations(d.vacations); if(d.locks) setLocks(d.locks);
+        if(d.lockDate) setLockDate(d.lockDate); if(d.year) setYear(d.year);
         showToast("✅ Backup hersteld!");
-      }catch{ showToast("❌ Ongeldig JSON bestand"); }
+      }catch{ showToast("❌ Ongeldig bestand"); }
     };
     reader.readAsText(file); e.target.value="";
   };
 
-const saveToSheets = useCallback(async () => {
-    try {
-      await Promise.all([
-        sbSet("staff",     staff),
-        sbSet("schedule",  schedule),
-        sbSet("settings",  settings),
-        sbSet("holidays",  holidays),
-        sbSet("vacations", vacations),
-        sbSet("locks",     locks),
-      ]);
-    } catch {}
-  }, [staff, schedule, settings, holidays, vacations, locks]);
+  const saveToSheets=useCallback(async()=>{
+    try{
+      await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
+      showToast("✅ Opgeslagen naar Supabase!");
+    }catch{ showToast("❌ Fout bij opslaan."); }
+  },[staff,schedule,settings,holidays,vacations,locks]);
 
-const loadFromSheets = useCallback(async () => {
-    try {
-      const [
-        staffData,
-        scheduleData,
-        settingsData,
-        holidaysData,
-        vacationsData,
-        locksData,
-      ] = await Promise.all([
-        sbGet("staff"),
-        sbGet("schedule"),
-        sbGet("settings"),
-        sbGet("holidays"),
-        sbGet("vacations"),
-        sbGet("locks"),
-      ]);
+  const loadFromSheets=useCallback(async()=>{
+    try{
+      const [sd,sc,se,sh,sv,sl]=await Promise.all([sbGet("staff"),sbGet("schedule"),sbGet("settings"),sbGet("holidays"),sbGet("vacations"),sbGet("locks")]);
+      if(sd&&Array.isArray(sd)&&sd.length>0){
+        isLoaded.current=false;
+        setStaff(sd.map(s=>({...s,id:Number(s.id)})));
+        if(sc){ const fx={}; Object.entries(sc).forEach(([k,v])=>{fx[Number(k)]=v;}); setSchedule(fx); }
+        if(se) setSettings(s=>({...s,...se}));
+        if(sh) setHolidays(sh);
+        if(sv) setVacations(sv);
+        if(sl) setLocks(sl);
+        setTimeout(()=>{ isLoaded.current=true; showToast("✅ Data geladen!"); },2000);
+      } else { isLoaded.current=true; }
+    }catch{ isLoaded.current=true; }
+    finally{ setIsAppReady(true); }
+  },[]);
 
-      const hasData = staffData && Array.isArray(staffData) && staffData.length > 0;
+  useEffect(()=>{ loadFromSheets(); },[]);
 
-      if (hasData) {
-        isLoaded.current = false;
-
-        setStaff(staffData.map(s => ({...s, id: Number(s.id)})));
-
-        if (scheduleData && typeof scheduleData === "object") {
-          const fixedSchedule = {};
-          Object.entries(scheduleData).forEach(([sid, days]) => {
-            fixedSchedule[Number(sid)] = days;
-          });
-          setSchedule(fixedSchedule);
-        }
-
-        if (settingsData  && typeof settingsData  === "object") setSettings(s => ({...s, ...settingsData}));
-        if (holidaysData  && Array.isArray(holidaysData))        setHolidays(holidaysData);
-        if (vacationsData && Array.isArray(vacationsData))       setVacations(vacationsData);
-        if (locksData     && typeof locksData     === "object")  setLocks(locksData);
-
-        setTimeout(() => {
-          isLoaded.current = true;
-          showToast("✅ Data geladen!");
-        }, 3000);
-
-      } else {
-        isLoaded.current = true;
-        showToast("📋 Geen data gevonden, lokale data wordt geüpload...");
-      }
-
-    } catch {
-      showToast("❌ Fout bij laden.");
-      isLoaded.current = true;
-    } finally {
-      setIsAppReady(true);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-
-  // Eenmalig laden bij opstart
-  useEffect(() => {
-    loadFromSheets();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-save — alleen als isLoaded true is
-     useEffect(() => {
-    if (!isLoaded.current) return;
-    const currentStaff     = staff;
-    const currentSchedule  = schedule;
-    const currentSettings  = settings;
-    const currentHolidays  = holidays;
-    const currentVacations = vacations;
-    const currentLocks     = locks;
-    const t = setTimeout(async () => {
-      try {
-        await Promise.all([
-          sbSet("staff",     currentStaff),
-          sbSet("schedule",  currentSchedule),
-          sbSet("settings",  currentSettings),
-          sbSet("holidays",  currentHolidays),
-          sbSet("vacations", currentVacations),
-          sbSet("locks",     currentLocks),
-        ]);
-      } catch {}
-    }, 2000);
-    return () => clearTimeout(t);
-  }, [staff, schedule, settings, holidays, vacations, locks]);
-
-
-
-
-
+  // Auto-save naar Supabase (debounced)
+  useEffect(()=>{
+    if(!isLoaded.current) return;
+    const t=setTimeout(async()=>{
+      try{ await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]); }catch{}
+    },2000);
+    return()=>clearTimeout(t);
+  },[staff,schedule,settings,holidays,vacations,locks]);
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
   const ws=weekDates[0],we=weekDates[6];
   const weekLabel=`Week ${weekNum} — ${ws.getDate()} ${MONTHS_NL[ws.getMonth()]} – ${we.getDate()} ${MONTHS_NL[we.getMonth()]} ${year}`;
-
   const navItems=[
-    {id:"week",  icon:"📅",label:"Weekplanning"},
-    {id:"year",  icon:"📆",label:"Jaaroverzicht"},
-    {id:"stats", icon:"📊",label:"Personeelsstats"},
-    {id:"staff", icon:"👥",label:"Personeel"},
+    {id:"week",icon:"📅",label:"Weekplanning"},
+    {id:"year",icon:"📆",label:"Jaaroverzicht"},
+    {id:"stats",icon:"📊",label:"Personeelsstats"},
+    {id:"staff",icon:"👥",label:"Personeel"},
     {id:"settings",icon:"⚙️",label:"Instellingen"},
     {id:"storage",icon:"💾",label:"Opslag & Backup"},
   ];
 
-  const topbarTitle={week:weekLabel,year:`Jaaroverzicht ${year}`,stats:"Personeelsstatistieken",staff:"Personeelsbeheer",settings:"Instellingen",storage:"Opslag & Backup"}[view];
-
   return(
     <>
       <style>{style}</style>
-
-            {!isAppReady && (
-        <div style={{
-          position:"fixed", inset:0, background:"var(--bg)",
-          display:"flex", flexDirection:"column",
-          alignItems:"center", justifyContent:"center",
-          zIndex:999, gap:16
-        }}>
-          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:"var(--gold)",letterSpacing:".05em"}}>
-            Casino Oostende
-          </div>
-          <div style={{fontSize:11,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".2em",marginBottom:8}}>
-            Live Games Planner
-          </div>
+      {!isAppReady&&(
+        <div style={{position:"fixed",inset:0,background:"var(--bg)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:999,gap:16}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:"var(--gold)"}}>Casino Oostende</div>
+          <div style={{fontSize:11,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".2em"}}>Live Games Planner</div>
           <div style={{width:48,height:48,border:"3px solid var(--border)",borderTop:"3px solid var(--gold)",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
-          <div style={{
-            marginTop:16, fontSize:13, color:"var(--text-dim)",
-            fontStyle:"italic", maxWidth:320, textAlign:"center",
-            lineHeight:1.6, padding:"12px 20px",
-            background:"var(--surface2)", borderRadius:10,
-            border:"1px solid var(--border)"
-          }}>
-            {loadingMsg}
-          </div>
+          <div style={{marginTop:8,fontSize:13,color:"var(--text-dim)",fontStyle:"italic",maxWidth:300,textAlign:"center",padding:"12px 20px",background:"var(--surface2)",borderRadius:10,border:"1px solid var(--border)"}}>{loadingMsg}</div>
         </div>
       )}
-
-
       <div className="app" style={{opacity:isAppReady?1:0,pointerEvents:isAppReady?"auto":"none"}}>
         <div className={`sidebar${sidebarOpen?" open":""}`}>
           <div className="sidebar-logo">
@@ -1702,7 +1045,6 @@ const loadFromSheets = useCallback(async () => {
               <div style={{marginTop:8,padding:"8px 10px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8}}>
                 <div style={{fontSize:10,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".1em",marginBottom:4}}>🔒 Lock tot datum</div>
                 <input type="date" value={lockDate||""} onChange={e=>setLockDate(e.target.value||null)}
-                  disabled={!isAppReady}
                   style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",color:lockDate?"var(--yellow)":"var(--text-dim)",padding:"5px 8px",borderRadius:6,fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}/>
                 {lockDate&&<div style={{fontSize:10,color:"var(--yellow)",marginTop:4}}>Beschermd tot {lockDate}</div>}
               </div>
@@ -1713,30 +1055,27 @@ const loadFromSheets = useCallback(async () => {
             {lockDate&&<div style={{marginTop:4}}><span className="lock-date-badge">🔒 tot {lockDate}</span></div>}
           </div>
         </div>
-
-        <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={()=>setSidebarOpen(false)}/>         <div className="main">
-         <div className="topbar">
-  <button className="hamburger" onClick={()=>setSidebarOpen(o=>!o)} aria-label="Menu">☰</button>
-  <div className="topbar-title">{topbarTitle}</div>
+        <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={()=>setSidebarOpen(false)}/>
+        <div className="main">
+          <div className="topbar">
+            <button className="hamburger" onClick={()=>setSidebarOpen(o=>!o)}>☰</button>
+            <div className="topbar-title">{{week:weekLabel,year:`Jaaroverzicht ${year}`,stats:"Personeelsstatistieken",staff:"Personeelsbeheer",settings:"Instellingen",storage:"Opslag & Backup"}[view]}</div>
             <div className="topbar-actions">
-              <select className="year-select" value={year} onChange={e=>handleYearChange(e.target.value)} disabled={!isAppReady}>
+              <select className="year-select" value={year} onChange={e=>handleYearChange(e.target.value)}>
                 {YEAR_RANGE.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
-              {view==="week"&&(
-                <>
-                  <button className="btn" onClick={()=>setWeekNum(w=>Math.max(1,w-1))} disabled={!isAppReady}>← Vorige</button>
-                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"var(--text-dim)",minWidth:48,textAlign:"center"}}>W{weekNum}/{weeksInYear}</span>
-                  <button className="btn" onClick={()=>setWeekNum(w=>Math.min(weeksInYear,w+1))} disabled={!isAppReady}>Volgende →</button>
-                </>
-              )}
-             <button className="btn btn-hide-mobile" onClick={exportCSV} disabled={!isAppReady}>⬇ CSV</button>
-<button className="btn btn-hide-mobile" onClick={exportJSON} disabled={!isAppReady}>💾 Backup</button>
+              {view==="week"&&(<>
+                <button className="btn" onClick={()=>setWeekNum(w=>Math.max(1,w-1))}>←</button>
+                <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"var(--text-dim)",minWidth:48,textAlign:"center"}}>W{weekNum}/{weeksInYear}</span>
+                <button className="btn" onClick={()=>setWeekNum(w=>Math.min(weeksInYear,w+1))}>→</button>
+              </>)}
+              <button className="btn btn-hide-mobile" onClick={exportCSV}>⬇ CSV</button>
+              <button className="btn btn-hide-mobile" onClick={exportJSON}>💾</button>
             </div>
           </div>
-
           <div className="content">
-            {view==="week"&&<WeekView staff={staff} schedule={schedule} setSchedule={handleSetSchedule} weekNum={weekNum} year={year} settings={settings} holidays={holidays} vacations={vacations} locks={locks} setLocks={setLocks} lockDate={lockDate} onNavigateAlert={handleNavigateAlert}/>}
-            {view==="year"&&<YearView schedule={schedule} staff={staff} year={year} holidays={holidays} vacations={vacations} settings={settings} onDayClick={ds=>{setWeekNum(getISOWeek(new Date(ds)));setView("week");showToast(`📅 Genavigeerd naar ${ds}`);}}/>}
+            {view==="week"&&<WeekView staff={staff} schedule={schedule} setSchedule={setSchedule} weekNum={weekNum} year={year} settings={settings} holidays={holidays} vacations={vacations} locks={locks} setLocks={setLocks} lockDate={lockDate} onNavigateAlert={handleNavigateAlert}/>}
+            {view==="year"&&<YearView schedule={schedule} staff={staff} year={year} holidays={holidays} vacations={vacations} settings={settings} onDayClick={ds=>{setWeekNum(getISOWeek(new Date(ds)));setView("week");}}/>}
             {view==="stats"&&<StaffStats staff={staff} schedule={schedule} year={year} holidays={holidays}/>}
             {view==="staff"&&<StaffManager staff={staff} setStaff={setStaff} schedule={schedule} year={year}/>}
             {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq} showToast={showToast}/>}
@@ -1744,7 +1083,6 @@ const loadFromSheets = useCallback(async () => {
           </div>
         </div>
       </div>
-
       {toast&&<div className={`toast ${toast.type==="motivatie"?"motivatie":""}`}>
         {toast.type==="motivatie"&&<div style={{fontSize:10,textTransform:"uppercase",letterSpacing:".12em",marginBottom:6,opacity:.8,display:"flex",alignItems:"center",gap:6}}><span style={{animation:"spin 3s linear infinite",display:"inline-block"}}>🎰</span> Bericht voor Rami</div>}
         {toast.msg}
