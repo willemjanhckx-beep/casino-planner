@@ -179,10 +179,19 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   const weeks = Object.keys(weekMap).map(Number).sort((a,b)=>a-b);
 
-  // Per medewerker: bijhouden hoeveel opeenvolgende werkdagen
   const consec = {};
   const shiftCounts = {};
-  autoStaff.forEach(s => { consec[s.id] = 0; shiftCounts[s.id] = { dag:0, avond:0, nacht:0 }; });
+  // Geef elke medewerker een andere startfase zodat de rotatie niet synchroon loopt
+  // Fase 0 = start nacht, fase 1 = start avond, fase 2 = start dag
+  autoStaff.forEach((s, idx) => {
+    consec[s.id] = 0;
+    const phase = idx % 3;
+    shiftCounts[s.id] = {
+      dag:   phase === 2 ? 1 : 0,
+      avond: phase === 1 ? 1 : 0,
+      nacht: phase === 0 ? 1 : 0,
+    };
+  });
 
   for (const wk of weeks) {
     const days = weekMap[wk];
