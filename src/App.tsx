@@ -260,41 +260,39 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         // Kies shift type: eerlijke rotatie dag/avond/nacht + bezettingsnood
         // Tel reeds toegewezen shifts dit jaar voor eerlijke verdeling
         const counts = shiftCounts[s.id];
-        const total  = counts.dag + counts.avond + counts.nacht || 1;
-        const rDag   = counts.dag   / total;
-        const rAvond = counts.avond / total;
-        const rNacht = counts.nacht / total;
+        const totalShifts = counts.dag + counts.avond + counts.nacht || 1;
+        const rDag   = counts.dag   / totalShifts;
+        const rAvond = counts.avond / totalShifts;
+        const rNacht = counts.nacht / totalShifts;
         const TARGET = 1/3;
 
-        // PRIORITEIT 1: minimumbezetting — als één type nog tekort heeft, kies dat
+        // PRIORITEIT 1: minimumbezetting
         const dagTekort   = dagNeed[ds]   > 0;
         const avondTekort = avondNeed[ds] > 0;
 
         let shiftType;
         if (dagTekort && !avondTekort) {
-          // Vroeg tekort → dag of avond (beide dekken de vroege periode)
+          // Vroeg tekort → dag of avond, maar NOOIT nacht als dag/avond nog te weinig heeft
           shiftType = (TARGET - rDag) >= (TARGET - rAvond) ? "dag" : "avond";
         } else if (avondTekort && !dagTekort) {
-          // Laat tekort → nacht (dekt de late periode)
           shiftType = "nacht";
         } else if (dagTekort && avondTekort) {
-          // Beide tekort: vroeg tekort → dag/avond, laat tekort → nacht
-          // Kies op basis van welk tekort groter is
           shiftType = dagNeed[ds] >= avondNeed[ds]
             ? ((TARGET - rDag) >= (TARGET - rAvond) ? "dag" : "avond")
             : "nacht";
         } else {
-          // PRIORITEIT 2: eerlijke verdeling (geen tekort meer)
-          const shortage = {
+          // PRIORITEIT 2: strikte eerlijke verdeling — kies de meest ondervertegenwoordigde
+          // Gebruik absolute achterstand: wie het verst van 1/3 zit krijgt voorrang
+          const deficit = {
             dag:   TARGET - rDag,
             avond: TARGET - rAvond,
             nacht: TARGET - rNacht,
           };
-          shiftType = Object.entries(shortage).sort((a,b)=>b[1]-a[1])[0][0];
+          shiftType = Object.entries(deficit).sort((a,b)=>b[1]-a[1])[0][0];
         }
 
         // PRIORITEIT 3: rotatie nacht→avond→dag binnen werkblok
-        // Enkel toegepast als minimumbezetting al gedekt is (geen tekort)
+        // Alleen als geen tekort én de afwijking van de gekozen shift < 8%
         if (!dagTekort && !avondTekort && consec[s.id] > 0) {
           const prev = new Date(ds); prev.setDate(prev.getDate()-1);
           const prevShift = (schedule[s.id]||{})[toDS(prev)];
@@ -303,8 +301,9 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
           const suggestedType = prevIdx >= 0 && prevIdx < order.length-1
             ? order[prevIdx+1]
             : prevIdx === -1 ? order[0] : shiftType;
-          const rSug = counts[suggestedType] / total;
-          if (suggestedType !== shiftType && (TARGET - rSug) > -0.15) {
+          const rSug = counts[suggestedType] / totalShifts;
+          // Strengere drempel: rotatie mag de verdeling max 8% uit balans brengen
+          if (suggestedType !== shiftType && (TARGET - rSug) > -0.08) {
             shiftType = suggestedType;
           }
         }
