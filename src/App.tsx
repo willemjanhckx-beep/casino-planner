@@ -198,8 +198,6 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       schedule[s.id] = { ...history };
       return;
     }
-    // Volledig herberekenen: enkel expliciet gelockte dagen (en dagen vóór
-    // de globale lockDate) blijven staan. De rest wordt helemaal opnieuw ingevuld.
     const kept = {};
     Object.entries(history).forEach(([ds, sh]) => {
       const isLocked = locks[lockKey(s.id, ds)] || (lockDateObjInit && new Date(ds) <= lockDateObjInit);
@@ -210,191 +208,134 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
 
-  // Bereken target werkdagen per week per medewerker
-  // Voltijds = 5 dagen/week, 80% = 4, 50% = 2-3
-  function targetDaysPerWeek(s) {
-    if (s.isFlexijob) return 3;
-    if (s.fte >= 1.0) return 5;
-    if (s.fte >= 0.8) return 4;
-    return 2; // 50%
-  }
-
-  // Alle dagen van het jaar, per week gegroepeerd
-  const weekMap = {}; // weekNr -> [dateStr, ...]
+  // Alle dagen van het jaar
+  const allDays = [];
   for (let d = new Date(year, 0, 1); d.getFullYear() === year; d.setDate(d.getDate() + 1)) {
-    const ds = toDS(new Date(d));
-    const wk = getISOWeek(new Date(d));
-    if (!weekMap[wk]) weekMap[wk] = [];
-    weekMap[wk].push(ds);
+    allDays.push(toDS(new Date(d)));
   }
 
-  const weeks = Object.keys(weekMap).map(Number).sort((a,b)=>a-b);
-
-  const consec = {};
-  const shiftCounts = {};
-  const hoursAssigned = {};
-  // Bouw de fairness- én urentelling op vanuit de werkelijk behouden historie.
-  autoStaff.forEach(s => {
-    consec[s.id] = 0;
-    const counts = { dag: 0, avond: 0, nacht: 0 };
-    let hrs = 0;
-    Object.values(schedule[s.id] || {}).forEach(sh => {
-      if (counts[sh] !== undefined) counts[sh]++;
-      hrs += getShift(sh).hours;
+  // Bezettingsnood per dag ("vroeg" = dag+avond, "laat" = nacht), afgeleid van
+  // wat al vaststaat (locks / historie). Wordt live bijgewerkt tijdens het toewijzen.
+  const dagNeed = {}, avondNeed = {};
+  allDays.forEach(ds => {
+    const locked = lockDateObj && new Date(ds) <= lockDateObj;
+    const demand = getDayDemand(ds, settings, holidays, vacations);
+    let vroeg = 0, laat = 0;
+    autoStaff.forEach(s => {
+      const ex = (schedule[s.id] || {})[ds];
+      if (ex === "dag" || ex === "avond") vroeg++;
+      if (ex === "nacht") laat++;
     });
-    shiftCounts[s.id] = counts;
+    dagNeed[ds]   = locked ? 0 : Math.max(0, demand.morning - vroeg);
+    avondNeed[ds] = locked ? 0 : Math.max(0, demand.evening - laat);
+  });
+
+  // Streefblok (werkdagen/rustdagen) per contracttype
+  function blockTargets(s) {
+    if (s.isFlexijob) return { work: 3, rest: 3 };
+    if (s.fte >= 1.0) return { work: 5, rest: 2 };
+    if (s.fte >= 0.8) return { work: 4, rest: 2 };
+    return { work: 2, rest: 3 }; // 50%
+  }
+
+  const maxConsec = settings.maxConsecDays || 5;
+
+  const hoursAssigned = {};
+  autoStaff.forEach(s => {
+    let hrs = 0;
+    Object.values(schedule[s.id] || {}).forEach(sh => hrs += getShift(sh).hours);
     hoursAssigned[s.id] = hrs;
   });
 
-  for (const wk of weeks) {
-    const days = weekMap[wk];
+  // Wie het verst achterloopt op zijn jaar-uren gaat eerst — die krijgt zo de
+  // beste kans op blokken op de dagen met de meeste nood.
+  const staffOrder = [...autoStaff].sort((a, b) => {
+    const targetA = getTargetHours(a), targetB = getTargetHours(b);
+    const paceA = targetA === Infinity ? 0 : hoursAssigned[a.id] / Math.max(targetA, 1);
+    const paceB = targetB === Infinity ? 0 : hoursAssigned[b.id] / Math.max(targetB, 1);
+    return (paceA - paceB) || (Math.random() - 0.5);
+  });
 
-    // Bepaal per dag de al-geboekte bezetting (locked + vacation/sick)
-    // en bereken hoeveel extra mensen we nog nodig hebben
-    const dagNeed   = {}; // dag + avond (vroege helft: 15:00–21:00 / 17:00–01:00)
-    const avondNeed = {}; // avond (late helft) + nacht
-    days.forEach(ds => {
-      const locked = lockDateObj && new Date(ds) <= lockDateObj;
-      if (locked) { dagNeed[ds] = 0; avondNeed[ds] = 0; return; }
-      const demand = getDayDemand(ds, settings, holidays, vacations);
-      let vroegCount = 0, laafCount = 0;
-      autoStaff.forEach(s => {
-        const ex = (schedule[s.id] || {})[ds];
-        if (ex === "dag" || ex === "avond") vroegCount++;  // dag + avond tellen als "vroeg"
-        if (ex === "nacht")                 laafCount++;   // nacht telt als "laat"
-      });
-      dagNeed[ds]   = Math.max(0, demand.morning - vroegCount);
-      avondNeed[ds] = Math.max(0, demand.evening - laafCount);
-    });
+  for (const s of staffOrder) {
+    const { work: workTarget, rest: restTarget } = blockTargets(s);
+    const targetHoursS = getTargetHours(s);
+    let i = 0;
+    let inBlock = false, blockLen = 0, blockPos = 0, restLen = 0, restPos = 0;
 
-    // Hoever staan we in het jaar? Nodig om te beoordelen of iemand "op tempo"
-    // ligt met zijn jaarlijkse urendoelstelling.
-    const weekIndex = weeks.indexOf(wk) + 1;
-    const yearProgress = weekIndex / weeks.length;
+    while (i < allDays.length) {
+      const ds = allDays[i];
+      const already = (schedule[s.id] || {})[ds];
+      const isLockedCell = !!locks[lockKey(s.id, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
 
-    // Verwerk het personeel in volgorde van wie het VERST ACHTERLOOPT op zijn
-    // uren-op-tempo, met willekeurige jitter bij gelijkstand. Dit vervangt een
-    // pure shuffle door een volgorde die ook over het hele jaar in balans blijft.
-    const staffOrder = [...autoStaff].sort((a, b) => {
-      const targetA = getTargetHours(a), targetB = getTargetHours(b);
-      const paceA = targetA === Infinity ? 0 : (hoursAssigned[a.id] / Math.max(targetA, 1)) - yearProgress;
-      const paceB = targetB === Infinity ? 0 : (hoursAssigned[b.id] / Math.max(targetB, 1)) - yearProgress;
-      return (paceA - paceB) || (Math.random() - 0.5); // achterstand eerst
-    });
+      // Al ingevuld (locked, vakantie, ziek, ...) -> overslaan zonder het blokritme te breken
+      if ((already && already !== "off") || isLockedCell) { i++; continue; }
 
-    for (const s of staffOrder) {
-      let target = targetDaysPerWeek(s);
-      // Zachte bijsturing: >10% vóór op tempo → 1 dag minder deze week;
-      // >10% áchter op tempo → 1 dag méér (de max-5-op-rij-check verderop
-      // blijft sowieso gelden, dus dit loopt nooit uit de hand).
-      const targetHoursS = getTargetHours(s);
-      if (targetHoursS !== Infinity && targetHoursS > 0) {
-        const pace = (hoursAssigned[s.id] / targetHoursS) - yearProgress;
-        if (pace > 0.10) target = Math.max(0, target - 1);
-        else if (pace < -0.10) target = target + 1;
+      const isoWeek = getISOWeek(new Date(ds));
+      if (!isAvailOnDate(s, ds, isoWeek)) {
+        schedule[s.id][ds] = "off";
+        i++; continue; // niet-beschikbare dag telt niet mee voor het blokritme
       }
 
-      // Welke dagen zijn al ingepland (locked/vacation/sick)?
-      const alreadyWorking = days.filter(ds => {
-        const ex = (schedule[s.id] || {})[ds];
-        return ex && ex !== "off";
-      });
-      const neededExtra = Math.max(0, target - alreadyWorking.length);
-
-      // Kandidaatdagen: niet gelockt, beschikbaar, niet al ingevuld
-      const candidates = days.filter(ds => {
-        if (lockDateObj && new Date(ds) <= lockDateObj) return false;
-        if (locks[lockKey(s.id, ds)]) return false;
-        const ex = (schedule[s.id] || {})[ds];
-        if (ex && ex !== "off") return false; // al ingepland
-        const isoWeek = getISOWeek(new Date(ds));
-        if (!isAvailOnDate(s, ds, isoWeek)) return false;
-        return true;
-      });
-
-     // Sorteer op bezettingsnood; bij gelijke nood willekeurige volgorde
-      // i.p.v. altijd terugvallen op maandag-eerst.
-      candidates.sort((a, b) => {
-        const needA = dagNeed[a] + avondNeed[a];
-        const needB = dagNeed[b] + avondNeed[b];
-        return needB - needA || (Math.random() - 0.5);
-      });
-
-      // Kies de beste dagen, rekening houdend met max 5 opeenvolgend
-      let assigned = 0;
-      for (const ds of candidates) {
-        if (assigned >= neededExtra) break;
-
-        // Check opeenvolgend: kijk naar dag vóór
-        const prev = new Date(ds); prev.setDate(prev.getDate() - 1);
-        const prevDs = toDS(prev);
-        const prevShift = (schedule[s.id] || {})[prevDs];
-        const wasWorking = prevShift && prevShift !== "off";
-
-        // Reset of verhoog streak
-        const streak = wasWorking ? (consec[s.id] || 0) + 1 : 1;
-        if (streak > 5) continue; // max 5 op rij
-
-        // Kies shift type: bezettingsnood weegt het zwaarst; bij geen acute
-        // nood een gewogen-willekeurige keuze op basis van de werkelijke
-        // dag/avond/nacht-verhouding. Geen vaste ketting, geen deterministische
-        // "altijd-hoogste-tekort-wint"-regel meer.
-        const counts = shiftCounts[s.id];
-        const totalShifts = counts.dag + counts.avond + counts.nacht || 1;
-        const TARGET = 1/3;
-        const deficit = {
-          dag:   TARGET - counts.dag   / totalShifts,
-          avond: TARGET - counts.avond / totalShifts,
-          nacht: TARGET - counts.nacht / totalShifts,
-        };
-
-        const dagTekort   = dagNeed[ds]   > 0;
-        const avondTekort = avondNeed[ds] > 0;
-
-        let shiftType;
-        if (dagTekort && !avondTekort) {
-          shiftType = weightedPick([
-            { value: "dag",   weight: 1 + deficit.dag   * 3 },
-            { value: "avond", weight: 1 + deficit.avond * 3 },
-          ]);
-        } else if (avondTekort && !dagTekort) {
-          shiftType = "nacht";
-        } else if (dagTekort && avondTekort) {
-          shiftType = dagNeed[ds] >= avondNeed[ds]
-            ? weightedPick([
-                { value: "dag",   weight: 1 + deficit.dag   * 3 },
-                { value: "avond", weight: 1 + deficit.avond * 3 },
-              ])
-            : "nacht";
-        } else {
-          // Geen acute nood: gewogen-willekeurige keuze, met voorkeur voor het
-          // type dat het verst onder zijn 1/3-aandeel zit — maar niet star.
-          shiftType = weightedPick([
-            { value: "dag",   weight: 1 + deficit.dag   * 4 },
-            { value: "avond", weight: 1 + deficit.avond * 4 },
-            { value: "nacht", weight: 1 + deficit.nacht * 4 },
-          ]);
-        }
-
-        schedule[s.id][ds] = shiftType;
-        if (shiftType === "dag" || shiftType === "avond") dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
-        if (shiftType === "nacht")                        avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
-        if (shiftType === "dag")   shiftCounts[s.id].dag++;
-        if (shiftType === "avond") shiftCounts[s.id].avond++;
-        if (shiftType === "nacht") shiftCounts[s.id].nacht++;
-        hoursAssigned[s.id] = (hoursAssigned[s.id] || 0) + getShift(shiftType).hours;
-        consec[s.id] = streak;
-        assigned++;
+      if (!inBlock && restPos < restLen) {
+        schedule[s.id][ds] = "off";
+        restPos++; i++; continue;
       }
 
-      // Resterende dagen van de week -> "off" (als niet al ingevuld)
-      days.forEach(ds => {
-        if (lockDateObj && new Date(ds) <= lockDateObj) return;
-        const ex = (schedule[s.id] || {})[ds];
-        if (!ex || ex === "off") {
-          schedule[s.id][ds] = "off";
+      if (!inBlock) {
+        // Nieuw werkblok starten — lengte rond het streefgetal, licht bijgestuurd
+        // op jaarurentempo, begrensd door max. opeenvolgende werkdagen.
+        let biasedTarget = workTarget;
+        if (targetHoursS !== Infinity && targetHoursS > 0) {
+          const yearProgress = i / allDays.length;
+          const pace = (hoursAssigned[s.id] / targetHoursS) - yearProgress;
+          if (pace > 0.08) biasedTarget = Math.max(1, workTarget - 1);
+          else if (pace < -0.08) biasedTarget = workTarget + 1;
         }
-      });
+        const variance = weightedPick([
+          { value: -1, weight: 1 }, { value: 0, weight: 3 }, { value: 1, weight: 1 },
+        ]);
+        blockLen = Math.max(1, Math.min(maxConsec, biasedTarget + variance));
+        blockPos = 0;
+        inBlock = true;
+      }
+
+      // Rotatiesuggestie nacht → avond → dag over het blok heen — maar bezetting
+      // heeft altijd voorrang op de rotatie.
+      const frac = blockLen > 1 ? blockPos / (blockLen - 1) : 0;
+      const rotationSuggestion = frac < 0.34 ? "nacht" : frac < 0.67 ? "avond" : "dag";
+      const dagTekort   = dagNeed[ds]   > 0;
+      const avondTekort = avondNeed[ds] > 0;
+
+      let shiftType;
+      if (dagTekort && !avondTekort) {
+        shiftType = rotationSuggestion === "nacht"
+          ? weightedPick([{ value: "dag", weight: 2 }, { value: "avond", weight: 2 }, { value: "nacht", weight: 1 }])
+          : rotationSuggestion;
+      } else if (avondTekort && !dagTekort) {
+        shiftType = "nacht";
+      } else if (dagTekort && avondTekort) {
+        shiftType = dagNeed[ds] >= avondNeed[ds]
+          ? (rotationSuggestion === "nacht" ? "avond" : rotationSuggestion)
+          : "nacht";
+      } else {
+        shiftType = rotationSuggestion; // geen acute nood: gewoon de rotatie volgen
+      }
+
+      schedule[s.id][ds] = shiftType;
+      if (shiftType === "dag" || shiftType === "avond") dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
+      if (shiftType === "nacht")                        avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
+      hoursAssigned[s.id] = (hoursAssigned[s.id] || 0) + getShift(shiftType).hours;
+
+      blockPos++; i++;
+
+      if (blockPos >= blockLen) {
+        inBlock = false;
+        const restVariance = weightedPick([
+          { value: -1, weight: 1 }, { value: 0, weight: 3 }, { value: 1, weight: 1 },
+        ]);
+        restLen = Math.max(1, restTarget + restVariance);
+        restPos = 0;
+      }
     }
   }
 
