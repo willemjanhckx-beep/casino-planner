@@ -415,6 +415,31 @@ function repairScheduleFairness(schedule, staff, year, settings, holidays, vacat
     return sc;
   }
 
+  const maxConsecNightsAllowed = Math.max(1, settings.maxConsecNights || 4);
+
+  // Lengte van de nachtreeks rond `ds`, uitgaande dat `sid` op `ds` de shift
+  // `hypotheticalShift` zou hebben. Gebruikt om te checken of een swap iemand
+  // over de toegestane opeenvolgende-nachtenlimiet zou duwen.
+  function nightStreakThrough(sid, ds, hypotheticalShift) {
+    if (hypotheticalShift !== "nacht") return 0;
+    let streak = 1;
+    let d = new Date(ds);
+    for (;;) {
+      d.setDate(d.getDate() - 1);
+      const pds = toDS(d);
+      if ((result[sid] || {})[pds] !== "nacht") break;
+      streak++;
+    }
+    d = new Date(ds);
+    for (;;) {
+      d.setDate(d.getDate() + 1);
+      const nds = toDS(d);
+      if ((result[sid] || {})[nds] !== "nacht") break;
+      streak++;
+    }
+    return streak;
+  }
+
   const T0 = 5, coolRate = T0 / iterations;
 
   for (let it = 0; it < iterations; it++) {
@@ -433,6 +458,12 @@ function repairScheduleFairness(schedule, staff, year, settings, holidays, vacat
     const shiftA = result[a.id][ds];
     const shiftB = result[b.id][ds];
     if (shiftA === shiftB) continue;
+
+    // Harde grens: deze swap mag niemands nachtenreeks over de toegestane
+    // limiet duwen — dit heeft voorrang op fairness/uren-balans.
+    const streakA = nightStreakThrough(a.id, ds, shiftB);
+    const streakB = nightStreakThrough(b.id, ds, shiftA);
+    if (streakA > maxConsecNightsAllowed || streakB > maxConsecNightsAllowed) continue;
 
     const scoreBefore = staffScore(a.id) + staffScore(b.id);
 
