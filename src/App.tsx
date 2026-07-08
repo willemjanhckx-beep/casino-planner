@@ -491,6 +491,42 @@ function repairScheduleFairness(schedule, staff, year, settings, holidays, vacat
   return result;
 }
 
+// ─── HARDE NACHTENLIMIET-CONTROLE ──────────────────────────────────────────
+// Laatste, gegarandeerde check ná generatie + repair: knipt elke reeks nachten
+// die de ingestelde limiet overschrijdt, ongeacht hoe die reeks ontstaan is
+// (generatie-logica, manuele invoer, import, ...). Gelockte cellen blijven
+// staan (bewuste keuze van de gebruiker), de rest wordt naar "off" gezet.
+function enforceNightCap(schedule, staff, year, settings, locks, lockDate) {
+  const maxConsec = Math.max(1, settings.maxConsecNights || 4);
+  const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
+  const result = {};
+  staff.forEach(s => { result[s.id] = { ...(schedule[s.id] || {}) }; });
+
+  const allDays = [];
+  for (let d = new Date(year, 0, 1); d.getFullYear() === year; d.setDate(d.getDate() + 1)) {
+    allDays.push(toDS(new Date(d)));
+  }
+
+  staff.filter(s => s.autoSchedule !== false).forEach(s => {
+    let streak = 0;
+    allDays.forEach(ds => {
+      const sh = (result[s.id] || {})[ds];
+      const isLocked = !!locks[lockKey(s.id, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
+      if (sh === "nacht") {
+        streak++;
+        if (streak > maxConsec && !isLocked) {
+          result[s.id][ds] = "off";
+          streak = 0;
+        }
+      } else {
+        streak = 0;
+      }
+    });
+  });
+
+  return result;
+}
+
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap');
@@ -1142,12 +1178,14 @@ export default function App(){
     setTimeout(()=>{
       const {schedule:generated} = generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate,fullReset);
       const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, lockDate);
-      setSchedule(repaired);
+      const capped = enforceNightCap(repaired, staff, year, settings, locks, lockDate);
+      setSchedule(capped);
       setGenerating(false);
       showToast(fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
       triggerMotivatie();
     },600);
   },[staff,year,settings,holidays,vacations,schedule,locks,lockDate,triggerMotivatie]);
+  
   const exportCSV=()=>{
     const dates=[]; for(let m=0;m<12;m++){const dim=new Date(year,m+1,0).getDate();for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d)));}
     const header=["Naam","FTE",...dates].join(";");
