@@ -261,29 +261,35 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
     const targetHoursS = getTargetHours(s);
     let i = 0;
     let inBlock = false, blockLen = 0, blockPos = 0, restLen = 0, restPos = 0;
+    const maxConsecOverride = Math.max(1, settings.maxConsecNights || 4);
+    let nightStreak = 0;
 
     while (i < allDays.length) {
       const ds = allDays[i];
       const already = (schedule[s.id] || {})[ds];
       const isLockedCell = !!locks[lockKey(s.id, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
 
-      // Al ingevuld (locked, vakantie, ziek, ...) -> overslaan zonder het blokritme te breken
-      if ((already && already !== "off") || isLockedCell) { i++; continue; }
+      if ((already && already !== "off") || isLockedCell) {
+        // Nachtstreak volgen ook voor reeds vaststaande dagen (locks/historie),
+        // zodat de teller klopt zodra we terug zelf gaan toewijzen.
+        nightStreak = already === "nacht" ? nightStreak + 1 : 0;
+        i++; continue;
+      }
 
       const isoWeek = getISOWeek(new Date(ds));
       if (!isAvailOnDate(s, ds, isoWeek)) {
         schedule[s.id][ds] = "off";
-        i++; continue; // niet-beschikbare dag telt niet mee voor het blokritme
+        nightStreak = 0;
+        i++; continue;
       }
 
       if (!inBlock && restPos < restLen) {
         schedule[s.id][ds] = "off";
+        nightStreak = 0;
         restPos++; i++; continue;
       }
 
       if (!inBlock) {
-        // Nieuw werkblok starten — lengte rond het streefgetal, licht bijgestuurd
-        // op jaarurentempo, begrensd door max. opeenvolgende werkdagen.
         let biasedTarget = workTarget;
         if (targetHoursS !== Infinity && targetHoursS > 0) {
           const yearProgress = i / allDays.length;
@@ -299,29 +305,47 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         inBlock = true;
       }
 
-      // Rotatiesuggestie nacht → avond → dag over het blok heen — maar bezetting
-      // heeft altijd voorrang op de rotatie.
       const frac = blockLen > 1 ? blockPos / (blockLen - 1) : 0;
       const rotationSuggestion = frac < 0.34 ? "nacht" : frac < 0.67 ? "avond" : "dag";
-      const dagTekort   = dagNeed[ds]   > 0;
-      const avondTekort = avondNeed[ds] > 0;
+      const dagTekort    = dagNeed[ds]   > 0;
+      const avondTekort  = avondNeed[ds] > 0;
+      const nightBlocked = nightStreak >= maxConsecOverride;
 
       let shiftType;
       if (dagTekort && !avondTekort) {
         shiftType = rotationSuggestion === "nacht"
           ? weightedPick([{ value: "dag", weight: 2 }, { value: "avond", weight: 2 }, { value: "nacht", weight: 1 }])
           : rotationSuggestion;
+        if (shiftType === "nacht" && nightBlocked) {
+          shiftType = weightedPick([{ value: "dag", weight: 1 }, { value: "avond", weight: 1 }]);
+        }
       } else if (avondTekort && !dagTekort) {
-        shiftType = "nacht";
+        shiftType = nightBlocked ? null : "nacht";
       } else if (dagTekort && avondTekort) {
-        shiftType = dagNeed[ds] >= avondNeed[ds]
-          ? (rotationSuggestion === "nacht" ? "avond" : rotationSuggestion)
-          : "nacht";
+        const preferNight = avondNeed[ds] >= dagNeed[ds] && !nightBlocked;
+        shiftType = preferNight ? "nacht" : (rotationSuggestion === "nacht" ? "avond" : rotationSuggestion);
       } else {
-        shiftType = rotationSuggestion; // geen acute nood: gewoon de rotatie volgen
+        shiftType = (rotationSuggestion === "nacht" && nightBlocked)
+          ? weightedPick([{ value: "dag", weight: 1 }, { value: "avond", weight: 1 }])
+          : rotationSuggestion;
+      }
+
+      if (shiftType === null) {
+        // Nachtlimiet bereikt en er is geen alternatief dat de nood van vandaag
+        // dekt: deze persoon krijgt rust, een volgende collega vangt het op.
+        schedule[s.id][ds] = "off";
+        nightStreak = 0;
+        inBlock = false;
+        const restVariance = weightedPick([
+          { value: -1, weight: 1 }, { value: 0, weight: 3 }, { value: 1, weight: 1 },
+        ]);
+        restLen = Math.max(1, restTarget + restVariance);
+        restPos = 0;
+        i++; continue;
       }
 
       schedule[s.id][ds] = shiftType;
+      nightStreak = shiftType === "nacht" ? nightStreak + 1 : 0;
       if (shiftType === "dag" || shiftType === "avond") dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
       if (shiftType === "nacht")                        avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
       hoursAssigned[s.id] = (hoursAssigned[s.id] || 0) + getShift(shiftType).hours;
