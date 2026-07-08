@@ -144,6 +144,29 @@ function isAvailOnDate(s,ds,isoWeek){
 function getWeeksInYear(y){ return getISOWeek(new Date(y,11,28)); }
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
+// Fisher-Yates shuffle — gebruikt om personeelsvolgorde per week te randomiseren,
+// zodat niet steeds dezelfde persoon als eerste (of laatste) aan de beurt komt.
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Kiest willekeurig één van de opties, met kans in verhouding tot het gewicht.
+// options: [{ value, weight }], weight mag 0 zijn (krijgt dan een minimale kans).
+function weightedPick(options) {
+  const total = options.reduce((sum, o) => sum + Math.max(o.weight, 0.0001), 0);
+  let r = Math.random() * total;
+  for (const o of options) {
+    r -= Math.max(o.weight, 0.0001);
+    if (r <= 0) return o.value;
+  }
+  return options[options.length - 1].value;
+}
+
 // ─── SCHEDULER ────────────────────────────────────────────────────────────────
 // Doelstelling:
 //   1. Elke medewerker werkt ~4-5 dagen/week (afhankelijk van FTE)
@@ -152,10 +175,25 @@ function lockKey(sid,ds){ return `${sid}::${ds}`; }
 //   4. Locks en globale lockDate worden gerespecteerd
 // Aanpak: week-per-week, per week bepalen welke dagen iemand werkt
 
-function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate) {
+function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate, fullReset = false) {
   const autoStaff = staff.filter(s => s.autoSchedule !== false);
   const schedule  = {};
-  autoStaff.forEach(s => { schedule[s.id] = { ...(existingSchedule[s.id] || {}) }; });
+  const lockDateObjInit = lockDate ? new Date(lockDate + "T23:59:59") : null;
+  autoStaff.forEach(s => {
+    const history = existingSchedule[s.id] || {};
+    if (!fullReset) {
+      schedule[s.id] = { ...history };
+      return;
+    }
+    // Volledig herberekenen: enkel expliciet gelockte dagen (en dagen vóór
+    // de globale lockDate) blijven staan. De rest wordt helemaal opnieuw ingevuld.
+    const kept = {};
+    Object.entries(history).forEach(([ds, sh]) => {
+      const isLocked = locks[lockKey(s.id, ds)] || (lockDateObjInit && new Date(ds) <= lockDateObjInit);
+      if (isLocked) kept[ds] = sh;
+    });
+    schedule[s.id] = kept;
+  });
 
   const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
 
@@ -181,16 +219,15 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   const consec = {};
   const shiftCounts = {};
-  // Geef elke medewerker een andere startfase zodat de rotatie niet synchroon loopt
-  // Fase 0 = start nacht, fase 1 = start avond, fase 2 = start dag
-  autoStaff.forEach((s, idx) => {
+  // Bouw de fairness-telling op vanuit de werkelijk behouden historie,
+  // niet vanuit een arbitraire, aan de arrayvolgorde gekoppelde seed.
+  autoStaff.forEach(s => {
     consec[s.id] = 0;
-    const phase = idx % 3;
-    shiftCounts[s.id] = {
-      dag:   phase === 2 ? 1 : 0,
-      avond: phase === 1 ? 1 : 0,
-      nacht: phase === 0 ? 1 : 0,
-    };
+    const counts = { dag: 0, avond: 0, nacht: 0 };
+    Object.values(schedule[s.id] || {}).forEach(sh => {
+      if (counts[sh] !== undefined) counts[sh]++;
+    });
+    shiftCounts[s.id] = counts;
   });
 
   for (const wk of weeks) {
@@ -214,7 +251,9 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       avondNeed[ds] = Math.max(0, demand.evening - laafCount);
     });
 
-    for (const s of autoStaff) {
+    // Elke week een nieuwe, willekeurige volgorde — anders krijgt dezelfde
+    // persoon week na week structureel voorrang op de dagen met de meeste nood.
+    for (const s of shuffle(autoStaff)) {
       const target = targetDaysPerWeek(s);
 
       // Welke dagen zijn al ingepland (locked/vacation/sick)?
@@ -235,11 +274,12 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         return true;
       });
 
-      // Sorteer kandidaten zodat dagen met de grootste bezettingsnood eerst komen
+     // Sorteer op bezettingsnood; bij gelijke nood willekeurige volgorde
+      // i.p.v. altijd terugvallen op maandag-eerst.
       candidates.sort((a, b) => {
         const needA = dagNeed[a] + avondNeed[a];
         const needB = dagNeed[b] + avondNeed[b];
-        return needB - needA; // hoogste nood eerst
+        return needB - needA || (Math.random() - 0.5);
       });
 
       // Kies de beste dagen, rekening houdend met max 5 opeenvolgend
@@ -257,55 +297,45 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         const streak = wasWorking ? (consec[s.id] || 0) + 1 : 1;
         if (streak > 5) continue; // max 5 op rij
 
-        // Kies shift type: eerlijke rotatie dag/avond/nacht + bezettingsnood
-        // Tel reeds toegewezen shifts dit jaar voor eerlijke verdeling
+        // Kies shift type: bezettingsnood weegt het zwaarst; bij geen acute
+        // nood een gewogen-willekeurige keuze op basis van de werkelijke
+        // dag/avond/nacht-verhouding. Geen vaste ketting, geen deterministische
+        // "altijd-hoogste-tekort-wint"-regel meer.
         const counts = shiftCounts[s.id];
         const totalShifts = counts.dag + counts.avond + counts.nacht || 1;
-        const rDag   = counts.dag   / totalShifts;
-        const rAvond = counts.avond / totalShifts;
-        const rNacht = counts.nacht / totalShifts;
         const TARGET = 1/3;
+        const deficit = {
+          dag:   TARGET - counts.dag   / totalShifts,
+          avond: TARGET - counts.avond / totalShifts,
+          nacht: TARGET - counts.nacht / totalShifts,
+        };
 
-        // PRIORITEIT 1: minimumbezetting
         const dagTekort   = dagNeed[ds]   > 0;
         const avondTekort = avondNeed[ds] > 0;
 
         let shiftType;
         if (dagTekort && !avondTekort) {
-          // Vroeg tekort → dag of avond, maar NOOIT nacht als dag/avond nog te weinig heeft
-          shiftType = (TARGET - rDag) >= (TARGET - rAvond) ? "dag" : "avond";
+          shiftType = weightedPick([
+            { value: "dag",   weight: 1 + deficit.dag   * 3 },
+            { value: "avond", weight: 1 + deficit.avond * 3 },
+          ]);
         } else if (avondTekort && !dagTekort) {
           shiftType = "nacht";
         } else if (dagTekort && avondTekort) {
           shiftType = dagNeed[ds] >= avondNeed[ds]
-            ? ((TARGET - rDag) >= (TARGET - rAvond) ? "dag" : "avond")
+            ? weightedPick([
+                { value: "dag",   weight: 1 + deficit.dag   * 3 },
+                { value: "avond", weight: 1 + deficit.avond * 3 },
+              ])
             : "nacht";
         } else {
-          // PRIORITEIT 2: strikte eerlijke verdeling — kies de meest ondervertegenwoordigde
-          // Gebruik absolute achterstand: wie het verst van 1/3 zit krijgt voorrang
-          const deficit = {
-            dag:   TARGET - rDag,
-            avond: TARGET - rAvond,
-            nacht: TARGET - rNacht,
-          };
-          shiftType = Object.entries(deficit).sort((a,b)=>b[1]-a[1])[0][0];
-        }
-
-        // PRIORITEIT 3: rotatie nacht→avond→dag binnen werkblok
-        // Alleen als geen tekort én de afwijking van de gekozen shift < 8%
-        if (!dagTekort && !avondTekort && consec[s.id] > 0) {
-          const prev = new Date(ds); prev.setDate(prev.getDate()-1);
-          const prevShift = (schedule[s.id]||{})[toDS(prev)];
-          const order = ["nacht","avond","dag"];
-          const prevIdx = order.indexOf(prevShift);
-          const suggestedType = prevIdx >= 0 && prevIdx < order.length-1
-            ? order[prevIdx+1]
-            : prevIdx === -1 ? order[0] : shiftType;
-          const rSug = counts[suggestedType] / totalShifts;
-          // Strengere drempel: rotatie mag de verdeling max 8% uit balans brengen
-          if (suggestedType !== shiftType && (TARGET - rSug) > -0.08) {
-            shiftType = suggestedType;
-          }
+          // Geen acute nood: gewogen-willekeurige keuze, met voorkeur voor het
+          // type dat het verst onder zijn 1/3-aandeel zit — maar niet star.
+          shiftType = weightedPick([
+            { value: "dag",   weight: 1 + deficit.dag   * 4 },
+            { value: "avond", weight: 1 + deficit.avond * 4 },
+            { value: "nacht", weight: 1 + deficit.nacht * 4 },
+          ]);
         }
 
         schedule[s.id][ds] = shiftType;
@@ -489,12 +519,13 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     if(!picker) return;
     const {staffId,dateStr}=picker;
     setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
-    if(shiftId==="vacation"||shiftId==="sick")
+    if(shiftId==="vacation"||shiftId==="sick"){
       setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
-    else
-      setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
+    }
+    // Reguliere shifts (dag/avond/nacht/off) worden NIET meer automatisch gelockt.
+    // Gebruik de aparte "🔒 Vergrendelen"-optie in de ShiftPicker om een cel
+    // bewust te bevriezen voor toekomstige generaties.
   },[picker,setSchedule,setLocks]);
-
   const handleToggleLock=useCallback(()=>{
     if(!picker) return;
     const k=lockKey(picker.staffId,picker.dateStr);
@@ -977,13 +1008,13 @@ export default function App(){
     showToast(`📍 Genavigeerd naar ${ds}`);
   },[]);
 
-  const generateRoster=useCallback(()=>{
+  const generateRoster=useCallback((fullReset=false)=>{
     setGenerating(true);
     setTimeout(()=>{
-      const {schedule:ns}=generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate);
+      const {schedule:ns}=generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate,fullReset);
       setSchedule(ns);
       setGenerating(false);
-      showToast("✅ Rooster gegenereerd!");
+      showToast(fullReset?"✅ Rooster volledig herberekend!":"✅ Rooster aangevuld!");
       triggerMotivatie();
     },600);
   },[staff,year,settings,holidays,vacations,schedule,locks,lockDate,triggerMotivatie]);
@@ -1093,8 +1124,14 @@ export default function App(){
             </div>
             <div className="nav-section">
               <div className="nav-label">Acties</div>
-              <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={generateRoster} disabled={generating||!isAppReady}>
-                {generating?"⏳ Bezig...":"🎲 Genereer Rooster"}
+              <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>generateRoster(false)} disabled={generating||!isAppReady}>
+                {generating?"⏳ Bezig...":"🎲 Aanvullen (behoud bestaand)"}
+              </button>
+              <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
+                if(!window.confirm("Volledig herberekenen? Alle niet-gelockte shiften voor "+year+" worden vervangen door een nieuwe, willekeurige verdeling."))return;
+                generateRoster(true);
+              }} disabled={generating||!isAppReady}>
+                {generating?"⏳ Bezig...":"🔁 Volledig herberekenen"}
               </button>
               <button className="btn btn-danger" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
                 if(!window.confirm("Schema volledig wissen voor "+year+"?")) return;
