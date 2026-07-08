@@ -157,6 +157,17 @@ function isAvailOnDate(s,ds,isoWeek){
 function getWeeksInYear(y){ return getISOWeek(new Date(y,11,28)); }
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
+// Geeft een gewicht terug voor een shifttype op basis van de persoonlijke
+// voorkeur van de medewerker. Geen voorkeur ingesteld -> neutraal (1) voor elk
+// type. Wél voorkeur ingesteld -> aangevinkte types wegen zwaarder, de rest
+// lichter. Wordt enkel gebruikt op momenten waar er nog vrije keuze is; waar
+// de bezetting een verplicht type oplegt, speelt voorkeur geen rol.
+function prefWeight(s, type) {
+  const prefs = s.shiftPrefs || [];
+  if (prefs.length === 0) return 1;
+  return prefs.includes(type) ? 2.5 : 0.5;
+}
+
 // Fisher-Yates shuffle — gebruikt om personeelsvolgorde per week te randomiseren,
 // zodat niet steeds dezelfde persoon als eerste (of laatste) aan de beurt komt.
 function shuffle(arr) {
@@ -306,27 +317,48 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       }
 
       const frac = blockLen > 1 ? blockPos / (blockLen - 1) : 0;
-      const rotationSuggestion = frac < 0.34 ? "nacht" : frac < 0.67 ? "avond" : "dag";
+      // Rotatiesuggestie houdt nu ook rekening met persoonlijke voorkeur: bij
+      // geen voorkeur blijft dit gewoon nacht→avond→dag over het blok heen.
+      const rotationSuggestion = weightedPick([
+        { value: "nacht", weight: (frac < 0.34 ? 3 : 1) * prefWeight(s, "nacht") },
+        { value: "avond", weight: (frac >= 0.34 && frac < 0.67 ? 3 : 1) * prefWeight(s, "avond") },
+        { value: "dag",   weight: (frac >= 0.67 ? 3 : 1) * prefWeight(s, "dag") },
+      ]);
       const dagTekort    = dagNeed[ds]   > 0;
       const avondTekort  = avondNeed[ds] > 0;
       const nightBlocked = nightStreak >= maxConsecOverride;
 
       let shiftType;
       if (dagTekort && !avondTekort) {
-        shiftType = rotationSuggestion === "nacht"
-          ? weightedPick([{ value: "dag", weight: 2 }, { value: "avond", weight: 2 }, { value: "nacht", weight: 1 }])
-          : rotationSuggestion;
+        shiftType = weightedPick([
+          { value: "dag",   weight: 2 * prefWeight(s, "dag") },
+          { value: "avond", weight: 2 * prefWeight(s, "avond") },
+          { value: "nacht", weight: 1 * prefWeight(s, "nacht") },
+        ]);
         if (shiftType === "nacht" && nightBlocked) {
-          shiftType = weightedPick([{ value: "dag", weight: 1 }, { value: "avond", weight: 1 }]);
+          shiftType = weightedPick([
+            { value: "dag",   weight: prefWeight(s, "dag") },
+            { value: "avond", weight: prefWeight(s, "avond") },
+          ]);
         }
       } else if (avondTekort && !dagTekort) {
+        // Bezetting heeft hier voorrang: nacht is het enige type dat de
+        // avondnood dekt, dus voorkeur speelt bewust geen rol in deze tak.
         shiftType = nightBlocked ? null : "nacht";
       } else if (dagTekort && avondTekort) {
         const preferNight = avondNeed[ds] >= dagNeed[ds] && !nightBlocked;
-        shiftType = preferNight ? "nacht" : (rotationSuggestion === "nacht" ? "avond" : rotationSuggestion);
+        shiftType = preferNight
+          ? "nacht"
+          : weightedPick([
+              { value: "dag",   weight: prefWeight(s, "dag") },
+              { value: "avond", weight: prefWeight(s, "avond") },
+            ]);
       } else {
         shiftType = (rotationSuggestion === "nacht" && nightBlocked)
-          ? weightedPick([{ value: "dag", weight: 1 }, { value: "avond", weight: 1 }])
+          ? weightedPick([
+              { value: "dag",   weight: prefWeight(s, "dag") },
+              { value: "avond", weight: prefWeight(s, "avond") },
+            ])
           : rotationSuggestion;
       }
 
@@ -372,7 +404,7 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 // gewerkte uren beter in balans te brengen. Omdat er enkel binnen dezelfde
 // dag wordt gewisseld, verandert de bezetting/minimumdekking van geen enkele
 // dag ooit — dus dit kan de coverage-doelstelling nooit verslechteren.
-function repairScheduleFairness(schedule, staff, year, settings, holidays, vacations, locks, lockDate, iterations = 4000) {
+function repairScheduleFairness(schedule, staff, year, settings, holidays, vacations, locks, lockDate, iterations = 9000) {
   const autoStaff = staff.filter(s => s.autoSchedule !== false && !s.isFlexijob);
   if (autoStaff.length < 2) return schedule;
 
@@ -391,13 +423,27 @@ function repairScheduleFairness(schedule, staff, year, settings, holidays, vacat
   const targetHours = {};
   const hours = {};
   const typeCounts = {};
+  const prefsById = {};
   autoStaff.forEach(s => {
     targetHours[s.id] = getTargetHours(s);
     let h = 0; const c = { dag: 0, avond: 0, nacht: 0 };
     Object.values(result[s.id] || {}).forEach(sh => { h += getShift(sh).hours; if (c[sh] !== undefined) c[sh]++; });
     hours[s.id] = h;
     typeCounts[s.id] = c;
+    prefsById[s.id] = (s.shiftPrefs && s.shiftPrefs.length) ? s.shiftPrefs : null;
   });
+
+  // Streef-verdeling per persoon: zonder voorkeur gewoon 1/3-1/3-1/3, mét
+  // voorkeur krijgen de aangevinkte types een groter aandeel van de koek.
+  function targetRatios(sid) {
+    const prefs = prefsById[sid];
+    if (!prefs) return { dag: 1/3, avond: 1/3, nacht: 1/3 };
+    const base = 0.15, bonus = 0.7 / prefs.length;
+    const r = { dag: base, avond: base, nacht: base };
+    prefs.forEach(t => { r[t] += bonus; });
+    const sum = r.dag + r.avond + r.nacht;
+    return { dag: r.dag / sum, avond: r.avond / sum, nacht: r.nacht / sum };
+  }
 
   function staffScore(sid) {
     let sc = 0;
@@ -408,9 +454,13 @@ function repairScheduleFairness(schedule, staff, year, settings, holidays, vacat
     }
     const c = typeCounts[sid];
     const total = c.dag + c.avond + c.nacht || 1;
+    const targets = targetRatios(sid);
     ["dag", "avond", "nacht"].forEach(t => {
-      const dev = c[t] / total - 1 / 3;
-      sc += dev * dev * 20;
+      const dev = c[t] / total - targets[t];
+      sc += dev * dev * 30;
+      // Extra straf als een type volledig ontbreekt (bv. iemand die enkel
+      // nacht/avond heeft) — dit duwt de repairpas actief naar variatie toe.
+      if (c[t] === 0 && total > 3) sc += 8;
     });
     return sc;
   }
@@ -912,12 +962,13 @@ function StaffStats({staff,schedule,year,holidays}){
 function StaffManager({staff,setStaff,schedule,year}){
   const [showModal,setShowModal]=useState(false);
   const [editing,setEditing]=useState(null);
-  const def={name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true};
+  const def={name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true,shiftPrefs:[]};
   const [form,setForm]=useState(def);
   const openAdd=()=>{setEditing(null);setForm(def);setShowModal(true);};
-  const openEdit=(s)=>{setEditing(s.id);setForm({name:s.name,fte:s.fte,color:s.color,vacationDays:s.vacationDays,availableDays:[...s.availableDays],partTimeMode:s.partTimeMode||"spread",isFlexijob:s.isFlexijob||false,autoSchedule:s.autoSchedule!==false});setShowModal(true);};
+  const openEdit=(s)=>{setEditing(s.id);setForm({name:s.name,fte:s.fte,color:s.color,vacationDays:s.vacationDays,availableDays:[...s.availableDays],partTimeMode:s.partTimeMode||"spread",isFlexijob:s.isFlexijob||false,autoSchedule:s.autoSchedule!==false,shiftPrefs:[...(s.shiftPrefs||[])]});setShowModal(true);};
   const handleFteChange=(v)=>{const f=parseFloat(v);setForm(x=>({...x,fte:f,vacationDays:FTE_VACATION[f]??Math.round(24*f)}));};
   const toggleDay=(day)=>setForm(f=>({...f,availableDays:f.availableDays.includes(day)?f.availableDays.filter(d=>d!==day):[...f.availableDays,day]}));
+  const togglePref=(type)=>setForm(f=>({...f,shiftPrefs:(f.shiftPrefs||[]).includes(type)?f.shiftPrefs.filter(t=>t!==type):[...(f.shiftPrefs||[]),type]}));
   const save=()=>{if(!form.name.trim())return;if(editing){setStaff(p=>p.map(s=>s.id===editing?{...s,...form,fte:parseFloat(form.fte)}:s));}else{setStaff(p=>[...p,{id:Date.now(),...form,fte:parseFloat(form.fte)}]);}setShowModal(false);};
   const remove=(id)=>setStaff(p=>p.filter(s=>s.id!==id));
   const regular=staff.filter(s=>!s.isFlexijob); const flexi=staff.filter(s=>s.isFlexijob);
@@ -984,6 +1035,16 @@ function StaffManager({staff,setStaff,schedule,year}){
                   <input type="checkbox" checked={form.availableDays.includes(i)} onChange={()=>toggleDay(i)}/>{DAYS_NL[i]}
                 </label>
               ))}</div>
+            </div>
+            <div className="form-row"><label className="form-label">Voorkeur shifttype (optioneel)</label>
+              <div className="day-checks">
+                {[["dag","Dag"],["avond","Avond"],["nacht","Nacht"]].map(([id,label])=>(
+                  <label key={id} className={`day-check ${(form.shiftPrefs||[]).includes(id)?"active":""}`}>
+                    <input type="checkbox" checked={(form.shiftPrefs||[]).includes(id)} onChange={()=>togglePref(id)}/>{label}
+                  </label>
+                ))}
+              </div>
+              <div style={{fontSize:11,color:"var(--text-dim)",marginTop:6}}>Aangevinkte types komen vaker voor bij deze persoon — maar enkel als de minimumbezetting dat toelaat.</div>
             </div>
             <div className="form-row"><label className="form-label">Automatisch inplannen</label>
               <div style={{display:"flex",gap:8}}>
