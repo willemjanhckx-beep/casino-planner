@@ -5,7 +5,10 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 async function sbGet(key) {
   try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/planner_data?key=eq.${key}&select=value`,
+    // Expliciet sorteren op updated_at + limit 1: mocht er (bv. door een
+    // ontbrekende unique constraint) toch een dubbele rij bestaan, pakken we
+    // altijd de meest recente i.p.v. willekeurig de eerste die terugkomt.
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/planner_data?key=eq.${key}&select=value,updated_at&order=updated_at.desc&limit=1`,
       { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } });
     const data = await r.json();
     if (!data || data.length === 0) return null;
@@ -14,7 +17,10 @@ async function sbGet(key) {
 }
 async function sbSet(key, value) {
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/planner_data`, {
+    // on_conflict=key is vereist opdat "Prefer: resolution=merge-duplicates"
+    // een echte UPDATE doet i.p.v. telkens een nieuwe rij toe te voegen.
+    // Vereist de unique constraint uit de SQL-stappen hierboven.
+    await fetch(`${SUPABASE_URL}/rest/v1/planner_data?on_conflict=key`, {
       method: "POST",
       headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`,
         "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
@@ -34,6 +40,13 @@ const SHIFT_TYPES = {
 };
 
 function getShift(id) { return SHIFT_TYPES[id] || SHIFT_TYPES.off; }
+
+// Jaarlijkse urendoelstelling — flexijobbers krijgen geen hard maximum,
+// vaste medewerkers wel (FTE × 38u × 52 weken).
+function getTargetHours(s) {
+  if (s.isFlexijob) return Infinity;
+  return s.fte * 38 * 52;
+}
 
 const FTE_VACATION   = { 1.0:24, 0.8:19, 0.5:12 };
 const CONTRACT_TYPES = [
@@ -219,15 +232,18 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   const consec = {};
   const shiftCounts = {};
-  // Bouw de fairness-telling op vanuit de werkelijk behouden historie,
-  // niet vanuit een arbitraire, aan de arrayvolgorde gekoppelde seed.
+  const hoursAssigned = {};
+  // Bouw de fairness- én urentelling op vanuit de werkelijk behouden historie.
   autoStaff.forEach(s => {
     consec[s.id] = 0;
     const counts = { dag: 0, avond: 0, nacht: 0 };
+    let hrs = 0;
     Object.values(schedule[s.id] || {}).forEach(sh => {
       if (counts[sh] !== undefined) counts[sh]++;
+      hrs += getShift(sh).hours;
     });
     shiftCounts[s.id] = counts;
+    hoursAssigned[s.id] = hrs;
   });
 
   for (const wk of weeks) {
@@ -251,10 +267,32 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       avondNeed[ds] = Math.max(0, demand.evening - laafCount);
     });
 
-    // Elke week een nieuwe, willekeurige volgorde — anders krijgt dezelfde
-    // persoon week na week structureel voorrang op de dagen met de meeste nood.
-    for (const s of shuffle(autoStaff)) {
-      const target = targetDaysPerWeek(s);
+    // Hoever staan we in het jaar? Nodig om te beoordelen of iemand "op tempo"
+    // ligt met zijn jaarlijkse urendoelstelling.
+    const weekIndex = weeks.indexOf(wk) + 1;
+    const yearProgress = weekIndex / weeks.length;
+
+    // Verwerk het personeel in volgorde van wie het VERST ACHTERLOOPT op zijn
+    // uren-op-tempo, met willekeurige jitter bij gelijkstand. Dit vervangt een
+    // pure shuffle door een volgorde die ook over het hele jaar in balans blijft.
+    const staffOrder = [...autoStaff].sort((a, b) => {
+      const targetA = getTargetHours(a), targetB = getTargetHours(b);
+      const paceA = targetA === Infinity ? 0 : (hoursAssigned[a.id] / Math.max(targetA, 1)) - yearProgress;
+      const paceB = targetB === Infinity ? 0 : (hoursAssigned[b.id] / Math.max(targetB, 1)) - yearProgress;
+      return (paceA - paceB) || (Math.random() - 0.5); // achterstand eerst
+    });
+
+    for (const s of staffOrder) {
+      let target = targetDaysPerWeek(s);
+      // Zachte bijsturing: >10% vóór op tempo → 1 dag minder deze week;
+      // >10% áchter op tempo → 1 dag méér (de max-5-op-rij-check verderop
+      // blijft sowieso gelden, dus dit loopt nooit uit de hand).
+      const targetHoursS = getTargetHours(s);
+      if (targetHoursS !== Infinity && targetHoursS > 0) {
+        const pace = (hoursAssigned[s.id] / targetHoursS) - yearProgress;
+        if (pace > 0.10) target = Math.max(0, target - 1);
+        else if (pace < -0.10) target = target + 1;
+      }
 
       // Welke dagen zijn al ingepland (locked/vacation/sick)?
       const alreadyWorking = days.filter(ds => {
@@ -344,6 +382,7 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         if (shiftType === "dag")   shiftCounts[s.id].dag++;
         if (shiftType === "avond") shiftCounts[s.id].avond++;
         if (shiftType === "nacht") shiftCounts[s.id].nacht++;
+        hoursAssigned[s.id] = (hoursAssigned[s.id] || 0) + getShift(shiftType).hours;
         consec[s.id] = streak;
         assigned++;
       }
@@ -360,6 +399,100 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   }
 
   return { schedule };
+}
+
+// ─── FAIRNESS REPAIR PASS (local search / simulated annealing) ────────────────
+// Draait ná generateSchedule(). Wisselt willekeurig shifttypes tussen twee
+// medewerkers OP DEZELFDE DAG om de dag/avond/nacht-verdeling en de totale
+// gewerkte uren beter in balans te brengen. Omdat er enkel binnen dezelfde
+// dag wordt gewisseld, verandert de bezetting/minimumdekking van geen enkele
+// dag ooit — dus dit kan de coverage-doelstelling nooit verslechteren.
+function repairScheduleFairness(schedule, staff, year, settings, holidays, vacations, locks, lockDate, iterations = 4000) {
+  const autoStaff = staff.filter(s => s.autoSchedule !== false && !s.isFlexijob);
+  if (autoStaff.length < 2) return schedule;
+
+  const result = {};
+  staff.forEach(s => { result[s.id] = { ...(schedule[s.id] || {}) }; });
+
+  const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
+  const isLockedCell = (sid, ds) =>
+    !!locks[lockKey(sid, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
+
+  const allDays = [];
+  for (let d = new Date(year, 0, 1); d.getFullYear() === year; d.setDate(d.getDate() + 1)) {
+    allDays.push(toDS(new Date(d)));
+  }
+
+  const targetHours = {};
+  const hours = {};
+  const typeCounts = {};
+  autoStaff.forEach(s => {
+    targetHours[s.id] = getTargetHours(s);
+    let h = 0; const c = { dag: 0, avond: 0, nacht: 0 };
+    Object.values(result[s.id] || {}).forEach(sh => { h += getShift(sh).hours; if (c[sh] !== undefined) c[sh]++; });
+    hours[s.id] = h;
+    typeCounts[s.id] = c;
+  });
+
+  function staffScore(sid) {
+    let sc = 0;
+    const th = targetHours[sid];
+    if (th !== Infinity && th > 0) {
+      const dev = hours[sid] / th - 1;
+      sc += dev * dev * 100;
+    }
+    const c = typeCounts[sid];
+    const total = c.dag + c.avond + c.nacht || 1;
+    ["dag", "avond", "nacht"].forEach(t => {
+      const dev = c[t] / total - 1 / 3;
+      sc += dev * dev * 20;
+    });
+    return sc;
+  }
+
+  const T0 = 5, coolRate = T0 / iterations;
+
+  for (let it = 0; it < iterations; it++) {
+    const temperature = Math.max(T0 - it * coolRate, 0.01);
+    const ds = allDays[Math.floor(Math.random() * allDays.length)];
+
+    const working = autoStaff.filter(s => {
+      const sh = (result[s.id] || {})[ds];
+      return sh && sh !== "off" && sh !== "vacation" && sh !== "sick" && !isLockedCell(s.id, ds);
+    });
+    if (working.length < 2) continue;
+    const a = working[Math.floor(Math.random() * working.length)];
+    const b = working[Math.floor(Math.random() * working.length)];
+    if (a.id === b.id) continue;
+
+    const shiftA = result[a.id][ds];
+    const shiftB = result[b.id][ds];
+    if (shiftA === shiftB) continue;
+
+    const scoreBefore = staffScore(a.id) + staffScore(b.id);
+
+    result[a.id][ds] = shiftB;
+    result[b.id][ds] = shiftA;
+    hours[a.id] += getShift(shiftB).hours - getShift(shiftA).hours;
+    hours[b.id] += getShift(shiftA).hours - getShift(shiftB).hours;
+    typeCounts[a.id][shiftA]--; typeCounts[a.id][shiftB]++;
+    typeCounts[b.id][shiftB]--; typeCounts[b.id][shiftA]++;
+
+    const scoreAfter = staffScore(a.id) + staffScore(b.id);
+    const delta = scoreAfter - scoreBefore;
+    const accept = delta <= 0 || Math.random() < Math.exp(-delta / temperature);
+
+    if (!accept) {
+      result[a.id][ds] = shiftA;
+      result[b.id][ds] = shiftB;
+      hours[a.id] += getShift(shiftA).hours - getShift(shiftB).hours;
+      hours[b.id] += getShift(shiftB).hours - getShift(shiftA).hours;
+      typeCounts[a.id][shiftB]--; typeCounts[a.id][shiftA]++;
+      typeCounts[b.id][shiftA]--; typeCounts[b.id][shiftB]++;
+    }
+  }
+
+  return result;
 }
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
@@ -1011,14 +1144,14 @@ export default function App(){
   const generateRoster=useCallback((fullReset=false)=>{
     setGenerating(true);
     setTimeout(()=>{
-      const {schedule:ns}=generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate,fullReset);
-      setSchedule(ns);
+      const {schedule:generated} = generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate,fullReset);
+      const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, lockDate);
+      setSchedule(repaired);
       setGenerating(false);
-      showToast(fullReset?"✅ Rooster volledig herberekend!":"✅ Rooster aangevuld!");
+      showToast(fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
       triggerMotivatie();
     },600);
   },[staff,year,settings,holidays,vacations,schedule,locks,lockDate,triggerMotivatie]);
-
   const exportCSV=()=>{
     const dates=[]; for(let m=0;m<12;m++){const dim=new Date(year,m+1,0).getDate();for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d)));}
     const header=["Naam","FTE",...dates].join(";");
