@@ -922,12 +922,12 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     const {staffId,from,to,shiftType}=bulkForm;
     if(!staffId||!from||!to||from>to) return;
     const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
-    let count=0;
+    let count=0,skipped=0;
     const updates={};
     for(let d=new Date(from+"T00:00:00");toDS(d)<=to;d.setDate(d.getDate()+1)){
       const ds=toDS(d);
       const isLocked=!!locks[lockKey(staffId,ds)]||(lockDateObj&&d<=lockDateObj);
-      if(isLocked) continue;
+      if(isLocked){ skipped++; continue; }
       updates[ds]=shiftType;
       count++;
     }
@@ -935,10 +935,11 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     if(shiftType==="vacation"||shiftType==="sick"){
       setLocks(prev=>{const next={...prev};Object.keys(updates).forEach(ds=>{next[lockKey(staffId,ds)]=true;});return next;});
     }
-    setWarn(`✅ ${count} dagen toegewezen.`);
-    setTimeout(()=>setWarn(null),2500);
+    setWarn(skipped>0?`✅ ${count} dagen toegewezen (${skipped} overgeslagen: gelockt).`:`✅ ${count} dagen toegewezen.`);
+    setTimeout(()=>setWarn(null),3500);
     setBulkOpen(false);
-  },[bulkForm,lockDate,locks,setSchedule,setLocks]);
+    if(count>0) onNavigateAlert&&onNavigateAlert(from);
+  },[bulkForm,lockDate,locks,setSchedule,setLocks,onNavigateAlert]);
 
   const coverage=dates.map(date=>{
     const ds=toDS(date);
