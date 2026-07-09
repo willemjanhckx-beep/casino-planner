@@ -861,6 +861,8 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
   const [picker,setPicker]=useState(null);
   const [warn,setWarn]=useState(null);
   const [suggestFor,setSuggestFor]=useState(null);
+  const [bulkOpen,setBulkOpen]=useState(false);
+  const [bulkForm,setBulkForm]=useState({staffId:staff[0]?.id||null,from:"",to:"",shiftType:"vacation"});
   const dates=getWeekDates(year,weekNum);
 
   const assignSuggestion=useCallback((sid,ds,shiftType)=>{
@@ -899,6 +901,28 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     const k=lockKey(picker.staffId,picker.dateStr);
     setLocks(prev=>({...prev,[k]:!prev[k]}));
   },[picker,setLocks]);
+
+  const applyBulk=useCallback(()=>{
+    const {staffId,from,to,shiftType}=bulkForm;
+    if(!staffId||!from||!to||from>to) return;
+    const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
+    let count=0;
+    const updates={};
+    for(let d=new Date(from+"T00:00:00");toDS(d)<=to;d.setDate(d.getDate()+1)){
+      const ds=toDS(d);
+      const isLocked=!!locks[lockKey(staffId,ds)]||(lockDateObj&&d<=lockDateObj);
+      if(isLocked) continue;
+      updates[ds]=shiftType;
+      count++;
+    }
+    setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),...updates}}));
+    if(shiftType==="vacation"||shiftType==="sick"){
+      setLocks(prev=>{const next={...prev};Object.keys(updates).forEach(ds=>{next[lockKey(staffId,ds)]=true;});return next;});
+    }
+    setWarn(`✅ ${count} dagen toegewezen.`);
+    setTimeout(()=>setWarn(null),2500);
+    setBulkOpen(false);
+  },[bulkForm,lockDate,locks,setSchedule,setLocks]);
 
   const coverage=dates.map(date=>{
     const ds=toDS(date);
@@ -1004,12 +1028,40 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
           )}
         </div>
       )}
-      <div className="legend">
-        {["dag","avond","nacht","off","vacation","sick"].map(id=>{ const s=getShift(id); return(
-          <div key={id} className="legend-item"><div className="legend-dot" style={{background:s.color}}/>{s.label}</div>
-        );})}
-        {lockDate&&<span className="lock-date-badge">🔒 gelockt tot {lockDate}</span>}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div className="legend" style={{marginBottom:0}}>
+          {["dag","avond","nacht","off","vacation","sick"].map(id=>{ const s=getShift(id); return(
+            <div key={id} className="legend-item"><div className="legend-dot" style={{background:s.color}}/>{s.label}</div>
+          );})}
+          {lockDate&&<span className="lock-date-badge">🔒 gelockt tot {lockDate}</span>}
+        </div>
+        <button className="btn" onClick={()=>setBulkOpen(true)}>📅 Bulk toewijzen</button>
       </div>
+      {bulkOpen&&(
+        <div className="modal-overlay" onClick={()=>setBulkOpen(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{width:380}}>
+            <div className="modal-title">Bulk toewijzen</div>
+            <div className="form-row"><label className="form-label">Medewerker</label>
+              <select className="form-input" value={bulkForm.staffId||""} onChange={e=>setBulkForm(f=>({...f,staffId:parseInt(e.target.value)}))}>
+                {staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <div className="form-row"><label className="form-label">Van</label><input className="form-input" type="date" value={bulkForm.from} onChange={e=>setBulkForm(f=>({...f,from:e.target.value}))}/></div>
+              <div className="form-row"><label className="form-label">Tot</label><input className="form-input" type="date" value={bulkForm.to} onChange={e=>setBulkForm(f=>({...f,to:e.target.value}))}/></div>
+            </div>
+            <div className="form-row"><label className="form-label">Type</label>
+              <select className="form-input" value={bulkForm.shiftType} onChange={e=>setBulkForm(f=>({...f,shiftType:e.target.value}))}>
+                {["vacation","sick","off","dag","avond","nacht"].map(id=><option key={id} value={id}>{getShift(id).label}</option>)}
+              </select>
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={()=>setBulkOpen(false)}>Annuleren</button>
+              <button className="btn btn-primary" onClick={applyBulk}>Toepassen</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{overflowX:"auto"}}>
         <table className="week-grid">
           <thead>
