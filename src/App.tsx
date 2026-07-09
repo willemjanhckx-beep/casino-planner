@@ -577,6 +577,69 @@ function enforceNightCap(schedule, staff, year, settings, locks, lockDate) {
   return result;
 }
 
+// ─── RUSTTIJDEN-CONTROLE ────────────────────────────────────────────────────
+// Draait ná enforceNightCap(). Twee checks per medewerker:
+//  1) Min. rust tussen shifts (uren) tussen einde shift dag N en start dag N+1.
+//  2) Min. rust na een nachtenreeks (dagen) vóór een volgende werkdag.
+// Gelockte cellen blijven staan; overtredingen worden naar "off" gezet.
+function shiftEnd(ds, shiftId) {
+  const sh = getShift(shiftId);
+  const d = new Date(ds + "T00:00:00");
+  d.setHours(d.getHours() + sh.startHour + sh.hours);
+  return d;
+}
+function shiftStart(ds, shiftId) {
+  const sh = getShift(shiftId);
+  const d = new Date(ds + "T00:00:00");
+  d.setHours(d.getHours() + sh.startHour);
+  return d;
+}
+function enforceRestRules(schedule, staff, year, settings, locks, lockDate) {
+  const minRestHours = Math.max(0, settings.minRestHours || 0);
+  const minRestAfterNights = Math.max(0, settings.minRestAfterNights || 0);
+  const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
+  const result = {};
+  staff.forEach(s => { result[s.id] = { ...(schedule[s.id] || {}) }; });
+
+  const allDays = [];
+  for (let d = new Date(year, 0, 1); d.getFullYear() === year; d.setDate(d.getDate() + 1)) {
+    allDays.push(toDS(new Date(d)));
+  }
+  const isLockedCell = (sid, ds) =>
+    !!locks[lockKey(sid, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
+
+  staff.filter(s => s.autoSchedule !== false).forEach(s => {
+    for (let i = 0; i < allDays.length - 1; i++) {
+      const dsA = allDays[i], dsB = allDays[i + 1];
+      const shA = result[s.id][dsA], shB = result[s.id][dsB];
+      if (!shA || !shB) continue;
+      if (getShift(shA).hours === 0 || getShift(shB).hours === 0) continue;
+      const rest = (shiftStart(dsB, shB) - shiftEnd(dsA, shA)) / 3600000;
+      if (rest < minRestHours && !isLockedCell(s.id, dsB)) {
+        result[s.id][dsB] = "off";
+      }
+    }
+    let nightStreak = 0;
+    for (let i = 0; i < allDays.length; i++) {
+      const ds = allDays[i];
+      const sh = result[s.id][ds];
+      if (sh === "nacht") { nightStreak++; continue; }
+      if (nightStreak > 0) {
+        for (let r = 0; r < minRestAfterNights && (i + r) < allDays.length; r++) {
+          const rds = allDays[i + r];
+          const rsh = result[s.id][rds];
+          if (rsh && getShift(rsh).hours > 0 && !isLockedCell(s.id, rds)) {
+            result[s.id][rds] = "off";
+          }
+        }
+        nightStreak = 0;
+      }
+    }
+  });
+
+  return result;
+}
+
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap');
@@ -1240,7 +1303,8 @@ export default function App(){
       const {schedule:generated} = generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate,fullReset);
       const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, lockDate);
       const capped = enforceNightCap(repaired, staff, year, settings, locks, lockDate);
-      setSchedule(capped);
+      const rested = enforceRestRules(capped, staff, year, settings, locks, lockDate);
+      setSchedule(rested);
       setGenerating(false);
       showToast(fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
       triggerMotivatie();
@@ -1362,11 +1426,20 @@ export default function App(){
                 {generating?"⏳ Bezig...":"🔁 Volledig herberekenen"}
               </button>
               <button className="btn btn-danger" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
-                if(!window.confirm("Schema volledig wissen voor "+year+"?")) return;
-                const empty={};
-                staff.forEach(s=>{ empty[s.id]={}; });
-                setSchedule(prev=>({...prev,...empty}));
-                showToast("🗑 Schema gewist voor "+year);
+                if(!window.confirm("Schema wissen voor "+year+"? Vergrendelde cellen (🔒) en data vóór de lock-datum blijven behouden."))return;
+                const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
+                const cleared={};
+                staff.forEach(s=>{
+                  const kept={};
+                  Object.entries(schedule[s.id]||{}).forEach(([ds,sh])=>{
+                    if(!ds.startsWith(String(year))){ kept[ds]=sh; return; }
+                    const isLocked=!!locks[lockKey(s.id,ds)]||(lockDateObj&&new Date(ds)<=lockDateObj);
+                    if(isLocked) kept[ds]=sh;
+                  });
+                  cleared[s.id]=kept;
+                });
+                setSchedule(prev=>({...prev,...cleared}));
+                showToast("🗑 Schema gewist voor "+year+" (locks behouden)");
               }} disabled={!isAppReady}>
                 🗑 Reset schema {year}
               </button>
