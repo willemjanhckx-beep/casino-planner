@@ -176,6 +176,7 @@ function isAvailOnDate(s,ds,isoWeek){
 }
 function getWeeksInYear(y){ return getISOWeek(new Date(y,11,28)); }
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
+function onKeyActivate(e,fn){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); fn(); } }
 
 // Geeft de best passende kandidaten terug om een concreet tekort op een
 // bepaalde dag en shifttype op te vullen. Filtert op: niet al ingepland die
@@ -847,7 +848,11 @@ function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
       {shiftOpts.map(id=>{
         const s=getShift(id);
         return(
-          <div key={id} className="shift-option" style={{background:s.bg,color:s.color}} onClick={()=>{onSelect(id);onClose();}}>
+          <div key={id} className="shift-option" role="button" tabIndex={0}
+            aria-label={s.label}
+            style={{background:s.bg,color:s.color}}
+            onClick={()=>{onSelect(id);onClose();}}
+            onKeyDown={e=>onKeyActivate(e,()=>{onSelect(id);onClose();})}>
             <div style={{width:8,height:8,borderRadius:3,background:s.color}}/>
             <span style={{minWidth:55}}>{s.label}</span>
             {s.time&&<span style={{opacity:.7,fontFamily:"'IBM Plex Mono',monospace",fontSize:10}}>{s.time}</span>}
@@ -855,7 +860,11 @@ function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
         );
       })}
       <div style={{borderTop:"1px solid var(--border)",marginTop:4,paddingTop:4}}>
-        <div className="shift-option" style={{background:"#1e3a5f30",color:"#60a5fa"}} onClick={()=>{onToggleLock();onClose();}}>
+        <div className="shift-option" role="button" tabIndex={0}
+          aria-label={isLocked?"Ontgrendelen":"Vergrendelen"}
+          style={{background:"#1e3a5f30",color:"#60a5fa"}}
+          onClick={()=>{onToggleLock();onClose();}}
+          onKeyDown={e=>onKeyActivate(e,()=>{onToggleLock();onClose();})}>
           {isLocked?"🔓 Ontgrendelen":"🔒 Vergrendelen"}
         </div>
       </div>
@@ -1172,8 +1181,11 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
               const bg=day.isHol?"#c9a84c40":day.isVac?"#22c55e30":day.isWE?"#3b82f620":ratio<0.8?"#ef444430":ratio<1?"#f59e0b30":"#22c55e20";
               const border=ratio<0.8?"1px solid #ef4444":ratio<1?"1px solid #f59e0b":"1px solid transparent";
               const isSel=selectedDs===day.ds;
-              return(<div key={day.d} className="day-dot"
-                onClick={()=>{setSelectedDs(day.ds);onDayClick&&onDayClick(day.ds);}}
+              const activate=()=>{setSelectedDs(day.ds);onDayClick&&onDayClick(day.ds);};
+              return(<div key={day.d} className="day-dot" role="button" tabIndex={0}
+                aria-label={`${day.ds}: ${day.cnt} staff`}
+                onClick={activate}
+                onKeyDown={e=>onKeyActivate(e,activate)}
                 style={{background:isSel?"var(--gold)":bg,border:isSel?"2px solid #fff":border,
                   color:isSel?"#000":"var(--text-dim)",fontSize:8,cursor:"pointer",
                   transform:isSel?"scale(1.2)":"",transition:"all .15s",position:"relative",zIndex:isSel?1:0}}
