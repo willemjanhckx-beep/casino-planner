@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 
 const SUPABASE_URL = "https://edlcobufsarpzakzscpl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGNvYnVmc2FycHpha3pzY3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODI0NDAsImV4cCI6MjA5MjQ1ODQ0MH0.pZcav2FMpqYh2io57F1HGVAuhullZC89KB34qNUxBoQ";
@@ -162,7 +162,7 @@ function lockKey(sid,ds){ return `${sid}::${ds}`; }
 // dag, niet gelockt, beschikbaar volgens rooster, voldoende rust vóór/ná de
 // shift, en (bij nacht) de nachtenlimiet niet zou overschrijden. Sorteert op
 // wie het verst achterloopt op zijn jaar-uren (eerlijkheid).
-function suggestStaffForShift(ds, shiftType, staff, schedule, settings, locks, lockDate) {
+function suggestStaffForShift(ds, shiftType, staff, schedule, settings, locks, lockDate, migrationHours = {}) {
   const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
   const isoWeek = getISOWeek(new Date(ds));
   const maxConsecNights = Math.max(1, settings.maxConsecNights || 4);
@@ -202,7 +202,7 @@ function suggestStaffForShift(ds, shiftType, staff, schedule, settings, locks, l
   });
 
   const hoursOf = (s) => {
-    let h = 0;
+    let h = migrationHours[s.id] || 0;
     Object.values(schedule[s.id] || {}).forEach(sh => { h += getShift(sh).hours; });
     return h;
   };
@@ -261,7 +261,7 @@ function weightedPick(options) {
 //   4. Locks en globale lockDate worden gerespecteerd
 // Aanpak: week-per-week, per week bepalen welke dagen iemand werkt
 
-function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate, fullReset = false) {
+function generateSchedule(staff, year, settings, holidays, vacations, existingSchedule, locks, lockDate, fullReset = false, migrationHours = {}) {
   const autoStaff = staff.filter(s => s.autoSchedule !== false);
   const schedule  = {};
   const lockDateObjInit = lockDate ? new Date(lockDate + "T23:59:59") : null;
@@ -317,7 +317,7 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   const hoursAssigned = {};
   autoStaff.forEach(s => {
-    let hrs = 0;
+    let hrs = migrationHours[s.id] || 0;
     Object.values(schedule[s.id] || {}).forEach(sh => hrs += getShift(sh).hours);
     hoursAssigned[s.id] = hrs;
   });
@@ -458,7 +458,7 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 // gewerkte uren beter in balans te brengen. Omdat er enkel binnen dezelfde
 // dag wordt gewisseld, verandert de bezetting/minimumdekking van geen enkele
 // dag ooit — dus dit kan de coverage-doelstelling nooit verslechteren.
-function repairScheduleFairness(schedule, staff, year, settings, holidays, vacations, locks, lockDate, iterations = 9000) {
+function repairScheduleFairness(schedule, staff, year, settings, holidays, vacations, locks, lockDate, migrationHours = {}, iterations = 9000) {
   const autoStaff = staff.filter(s => s.autoSchedule !== false && !s.isFlexijob);
   if (autoStaff.length < 2) return schedule;
 
@@ -480,7 +480,7 @@ function repairScheduleFairness(schedule, staff, year, settings, holidays, vacat
   const prefsById = {};
   autoStaff.forEach(s => {
     targetHours[s.id] = getTargetHours(s);
-    let h = 0; const c = { dag: 0, avond: 0, nacht: 0 };
+    let h = migrationHours[s.id] || 0; const c = { dag: 0, avond: 0, nacht: 0 };
     Object.values(result[s.id] || {}).forEach(sh => { h += getShift(sh).hours; if (c[sh] !== undefined) c[sh]++; });
     hours[s.id] = h;
     typeCounts[s.id] = c;
@@ -835,7 +835,7 @@ function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
 }
 
 // ─── WEEK VIEW ────────────────────────────────────────────────────────────────
-function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vacations,locks,setLocks,lockDate,onNavigateAlert}){
+function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vacations,locks,setLocks,lockDate,migrationHours,onNavigateAlert}){
   const [picker,setPicker]=useState(null);
   const [warn,setWarn]=useState(null);
   const [suggestFor,setSuggestFor]=useState(null);
@@ -936,7 +936,7 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
             <div style={{background:"#7f1d1d18",border:"1px solid #7f1d1d",borderTop:"none",borderRadius:"0 0 8px 8px"}}>
               {alerts.map((a,i)=>{
                 const isOpen=suggestFor===i;
-                const suggestions=isOpen?suggestStaffForShift(a.ds,a.shiftType,staff,schedule,settings,locks,lockDate):[];
+                const suggestions=isOpen?suggestStaffForShift(a.ds,a.shiftType,staff,schedule,settings,locks,lockDate,migrationHours):[];
                 return(
                   <div key={i} style={{borderTop:i>0?"1px solid #7f1d1d30":"none"}}>
                     <div style={{padding:"7px 14px",fontSize:12,color:"#fca5a5",display:"flex",alignItems:"center",gap:8}}>
@@ -1064,10 +1064,10 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
 }
 
 // ─── STAFF STATS ──────────────────────────────────────────────────────────────
-function StaffStats({staff,schedule,year,holidays}){
+function StaffStats({staff,schedule,year,holidays,migrationHours}){
   const regular=staff.filter(s=>!s.isFlexijob);
   const computed=regular.map(s=>{
-    let totalHours=0,weekendShifts=0,nightShifts=0,holidayShifts=0,vacUsed=0,workDays=0;
+    let totalHours=migrationHours?.[s.id]||0,weekendShifts=0,nightShifts=0,holidayShifts=0,vacUsed=0,workDays=0;
     Object.entries(schedule[s.id]||{}).forEach(([ds,sid])=>{
       if(!ds.startsWith(String(year))) return;
       if(sid==="vacation"){ vacUsed++; return; }
@@ -1231,7 +1231,7 @@ const DEFAULT_SETTINGS={
   maxConsecNights:4, minRestAfterNights:2, maxConsecDays:5, minRestHours:11,
 };
 
-function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq,showToast}){
+function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq,showToast,staff,migrationDate,setMigrationDate,migrationHours,setMigrationHours}){
   const [newH,setNewH]=useState(""); const [nVN,setNVN]=useState(""); const [nVS,setNVS]=useState(""); const [nVE,setNVE]=useState("");
   const upd=(k,v)=>setSettings(s=>({...s,[k]:parseFloat(v)||v}));
   const freqLabels=["Nooit","Zelden","Normaal","Vaak"];
@@ -1260,6 +1260,43 @@ function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVa
           </div>
           {lockDate&&<div style={{padding:10,background:"#78350f20",border:"1px solid #78350f",borderRadius:7,fontSize:12,color:"var(--yellow)",marginBottom:8}}>🔒 Historische data beschermd tot {lockDate}</div>}
           <button className="btn btn-danger" onClick={()=>setLockDate(null)}>Verwijderen</button>
+        </div>
+        <div className="settings-section">
+          <div className="settings-title">🔄 Systeemoverschakeling</div>
+          <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:12}}>
+            Kom je van een ander planningssysteem? Geef de overschakeldatum en de reeds
+            gewerkte uren per medewerker dit jaar in. De app genereert dan enkel nog
+            shiften ná deze datum, en houdt bij de eerlijke verdeling rekening met de
+            uren die al elders gewerkt zijn.
+          </div>
+          <div className="form-row"><label className="form-label">Overschakeldatum (app neemt over vanaf de dag erna)</label>
+            <input className="form-input" type="date" value={migrationDate||""} onChange={e=>setMigrationDate(e.target.value||null)}/>
+          </div>
+          {migrationDate&&(
+            <div style={{padding:10,background:"#78350f20",border:"1px solid #78350f",borderRadius:7,fontSize:12,color:"var(--yellow)",marginBottom:12}}>
+              🔄 Shiften worden pas gegenereerd na {migrationDate}
+            </div>
+          )}
+          <div style={{maxHeight:260,overflowY:"auto"}}>
+            <table className="staff-table">
+              <thead><tr><th>Medewerker</th><th>Reeds gewerkte uren dit jaar</th></tr></thead>
+              <tbody>
+                {staff.filter(s=>!s.isFlexijob).map(s=>(
+                  <tr key={s.id}>
+                    <td><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:10,height:10,borderRadius:3,background:s.color}}/>{s.name}</div></td>
+                    <td>
+                      <input className="form-input" type="number" min={0} style={{maxWidth:120}}
+                        value={migrationHours[s.id]||0}
+                        onChange={e=>setMigrationHours(m=>({...m,[s.id]:parseFloat(e.target.value)||0}))}/>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {migrationDate&&(
+            <button className="btn btn-danger" style={{marginTop:10}} onClick={()=>{setMigrationDate(null);setMigrationHours({});}}>Overschakeling verwijderen</button>
+          )}
         </div>
         <div className="settings-section">
           <div className="settings-title">🎉 Feestdagen</div>
@@ -1348,6 +1385,8 @@ export default function App(){
   const [vacations,setVacations]=useState(()=>load(SK.vacations,VACATIONS_BY_YEAR[2026]||[]));
   const [locks,setLocks]=useState(()=>load(SK.locks,{}));
   const [lockDate,setLockDate]=useState(()=>load("co3_lockdate",null));
+  const [migrationDate,setMigrationDate]=useState(()=>load("co3_migration_date",null));
+  const [migrationHours,setMigrationHours]=useState(()=>load("co3_migration_hours",{}));
   const [generating,setGenerating]=useState(false);
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const [toast,setToast]=useState(null);
@@ -1366,9 +1405,20 @@ export default function App(){
   useEffect(()=>{ save(SK.vacations,vacations); },[vacations]);
   useEffect(()=>{ save(SK.locks,locks); },[locks]);
   useEffect(()=>{ save("co3_lockdate",lockDate); },[lockDate]);
+  useEffect(()=>{ save("co3_migration_date",migrationDate); },[migrationDate]);
+  useEffect(()=>{ save("co3_migration_hours",migrationHours); },[migrationHours]);
   useEffect(()=>{ save("co3_motiv_on",motivatieEnabled); },[motivatieEnabled]);
   useEffect(()=>{ save("co3_motiv_freq",motivatieFreq); },[motivatieFreq]);
   useEffect(()=>{ save(SK.year,year); },[year]);
+
+  // Effectieve grens = de laatste van (a) de manuele lockDate en (b) de
+  // migratiedatum. Zo genereert de app nooit shiften vóór/op de dag dat het
+  // oude systeem nog gebruikt werd, ook als er geen aparte lockDate is gezet.
+  const effectiveLockDate=useMemo(()=>{
+    if(!lockDate) return migrationDate||null;
+    if(!migrationDate) return lockDate;
+    return lockDate>migrationDate?lockDate:migrationDate;
+  },[lockDate,migrationDate]);
 
   const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
 
@@ -1396,16 +1446,16 @@ export default function App(){
   const generateRoster=useCallback((fullReset=false)=>{
     setGenerating(true);
     setTimeout(()=>{
-      const {schedule:generated} = generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,lockDate,fullReset);
-      const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, lockDate);
-      const capped = enforceNightCap(repaired, staff, year, settings, locks, lockDate);
-      const rested = enforceRestRules(capped, staff, year, settings, locks, lockDate);
+      const {schedule:generated} = generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,effectiveLockDate,fullReset,migrationHours);
+      const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, effectiveLockDate, migrationHours);
+      const capped = enforceNightCap(repaired, staff, year, settings, locks, effectiveLockDate);
+      const rested = enforceRestRules(capped, staff, year, settings, locks, effectiveLockDate);
       setSchedule(rested);
       setGenerating(false);
       showToast(fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
       triggerMotivatie();
     },600);
-  },[staff,year,settings,holidays,vacations,schedule,locks,lockDate,triggerMotivatie]);
+  },[staff,year,settings,holidays,vacations,schedule,locks,effectiveLockDate,migrationHours,triggerMotivatie]);
   
   const exportCSV=()=>{
     const dates=[]; for(let m=0;m<12;m++){const dim=new Date(year,m+1,0).getDate();for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d)));}
@@ -1571,11 +1621,11 @@ export default function App(){
             </div>
           </div>
           <div className="content">
-            {view==="week"&&<WeekView staff={staff} schedule={schedule} setSchedule={setSchedule} weekNum={weekNum} year={year} settings={settings} holidays={holidays} vacations={vacations} locks={locks} setLocks={setLocks} lockDate={lockDate} onNavigateAlert={handleNavigateAlert}/>}
+            {view==="week"&&<WeekView staff={staff} schedule={schedule} setSchedule={setSchedule} weekNum={weekNum} year={year} settings={settings} holidays={holidays} vacations={vacations} locks={locks} setLocks={setLocks} lockDate={effectiveLockDate} migrationHours={migrationHours} onNavigateAlert={handleNavigateAlert}/>}
             {view==="year"&&<YearView schedule={schedule} staff={staff} year={year} holidays={holidays} vacations={vacations} settings={settings} onDayClick={ds=>{setWeekNum(getISOWeek(new Date(ds)));setView("week");}}/>}
-            {view==="stats"&&<StaffStats staff={staff} schedule={schedule} year={year} holidays={holidays}/>}
+            {view==="stats"&&<StaffStats staff={staff} schedule={schedule} year={year} holidays={holidays} migrationHours={migrationHours}/>}
             {view==="staff"&&<StaffManager staff={staff} setStaff={setStaff} schedule={schedule} year={year}/>}
-            {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq} showToast={showToast}/>}
+            {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq} showToast={showToast} staff={staff} migrationDate={migrationDate} setMigrationDate={setMigrationDate} migrationHours={migrationHours} setMigrationHours={setMigrationHours}/>}
             {view==="storage"&&<StorageView onExport={exportJSON} onImport={importJSON} onSaveToSheets={saveToSheets} onLoadFromSheets={loadFromSheets}/>}
           </div>
         </div>
