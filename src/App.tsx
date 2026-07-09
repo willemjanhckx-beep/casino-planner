@@ -1760,6 +1760,17 @@ export default function App(){
     }catch{ setSyncStatus({state:"error",time:null}); showToast("❌ Fout bij opslaan."); }
   },[staff,schedule,settings,holidays,vacations,locks]);
 
+  const flushPendingSync=useCallback(async()=>{
+    if(!pendingSyncRef.current||!latestRef.current) return;
+    pendingSyncRef.current=false;
+    const {staff,schedule,settings,holidays,vacations,locks}=latestRef.current;
+    setSyncStatus({state:"saving",time:null});
+    try{
+      await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
+      setSyncStatus({state:"saved",time:new Date()});
+    }catch{ setSyncStatus({state:"error",time:null}); }
+  },[]);
+
   const loadFromSheets=useCallback(async()=>{
     try{
       const [sdR,scR,seR,shR,svR,slR]=await Promise.all([sbGet("staff"),sbGet("schedule"),sbGet("settings"),sbGet("holidays"),sbGet("vacations"),sbGet("locks")]);
@@ -1809,17 +1820,6 @@ export default function App(){
     },2000);
     return()=>clearTimeout(t);
   },[staff,schedule,settings,holidays,vacations,locks]);
-
-  const flushPendingSync=useCallback(async()=>{
-    if(!pendingSyncRef.current||!latestRef.current) return;
-    pendingSyncRef.current=false;
-    const {staff,schedule,settings,holidays,vacations,locks}=latestRef.current;
-    setSyncStatus({state:"saving",time:null});
-    try{
-      await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
-      setSyncStatus({state:"saved",time:new Date()});
-    }catch{ setSyncStatus({state:"error",time:null}); }
-  },[]);
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
