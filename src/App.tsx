@@ -45,7 +45,8 @@ function getShift(id) { return SHIFT_TYPES[id] || SHIFT_TYPES.off; }
 // vaste medewerkers wel (FTE × 38u × 52 weken).
 function getTargetHours(s) {
   if (s.isFlexijob) return Infinity;
-  return s.fte * 38 * 52;
+  const weeksOff = (s.vacationDays || 0) / 5; // 5 vakantiedagen ≈ 1 werkweek
+  return s.fte * 38 * Math.max(0, 52 - weeksOff);
 }
 
 const FTE_VACATION   = { 1.0:24, 0.8:19, 0.5:12 };
@@ -323,14 +324,16 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
   });
 
   // Wie het verst achterloopt op zijn jaar-uren gaat eerst — die krijgt zo de
-  // beste kans op blokken op de dagen met de meeste nood.
+  // beste kans op blokken op de dagen met de meeste nood. Vast personeel
+  // krijgt hierbij altijd voorrang op flexijobbers (target=Infinity, pace=0),
+  // zodat flexi pas aanvult nadat de vaste ploeg zijn blokken heeft gekregen.
   const staffOrder = [...autoStaff].sort((a, b) => {
+    if (a.isFlexijob !== b.isFlexijob) return a.isFlexijob ? 1 : -1;
     const targetA = getTargetHours(a), targetB = getTargetHours(b);
     const paceA = targetA === Infinity ? 0 : hoursAssigned[a.id] / Math.max(targetA, 1);
     const paceB = targetB === Infinity ? 0 : hoursAssigned[b.id] / Math.max(targetB, 1);
     return (paceA - paceB) || (Math.random() - 0.5);
   });
-
   for (const s of staffOrder) {
     const { work: workTarget, rest: restTarget } = blockTargets(s);
     const targetHoursS = getTargetHours(s);
@@ -1077,7 +1080,7 @@ function StaffStats({staff,schedule,year,holidays,migrationHours}){
       if(sh.startHour>=21) nightShifts++;
       if(isHoliday(ds,holidays)) holidayShifts++;
     });
-    const targetHours=s.fte*38*52;
+    const targetHours=getTargetHours(s);
     const vr=vacUsed/Math.max(s.vacationDays,1);
     const hr=totalHours/Math.max(targetHours,1);
     const fatigueScore=Math.min(100,(nightShifts/120)*100);
