@@ -829,8 +829,15 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .lock-date-badge{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--yellow);background:#78350f30;padding:3px 8px;border-radius:4px;border:1px solid #78350f;}
 .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:299;}
 .sidebar-overlay.open{display:block;}
+.week-cards{display:none;}
+.staff-card{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px;}
+.staff-card-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;font-weight:500;}
+.staff-card-days{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+.staff-card-day{border-radius:6px;padding:5px 2px;text-align:center;cursor:pointer;position:relative;}
+.staff-card-day .d-label{font-size:8px;opacity:.7;font-family:'IBM Plex Mono',monospace;}
+.staff-card-day .d-shift{font-size:9px;font-weight:600;margin-top:2px;}
+@media(max-width:768px){.week-table-wrap{display:none;}.week-cards{display:block;}}
 `;
-
 // ─── SHIFT PICKER ─────────────────────────────────────────────────────────────
 function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
   useEffect(()=>{ const h=()=>onClose(); window.addEventListener("click",h); return()=>window.removeEventListener("click",h); },[onClose]);
@@ -974,6 +981,35 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     </tr>
   );
 
+  const renderCard=(s)=>(
+    <div key={s.id} className="staff-card">
+      <div className="staff-card-head">
+        <span className="staff-dot" style={{background:s.color}}/>
+        {s.name}
+        {s.isFlexijob&&<span className="flex-badge">{s.autoSchedule?"Flex":"Flex✋"}</span>}
+        {!s.isFlexijob&&s.fte<1&&<span className="fte-badge">{Math.round(s.fte*100)}%</span>}
+      </div>
+      <div className="staff-card-days">
+        {dates.map((d,i)=>{
+          const ds=toDS(d);
+          const shiftId=(schedule[s.id]||{})[ds]||"off";
+          const shift=getShift(shiftId);
+          const isLocked=!!locks[lockKey(s.id,ds)];
+          const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate+"T23:59:59");
+          const locked=isLocked||isPastLock;
+          return(
+            <div key={i} className="staff-card-day" style={{background:shift.bg,border:`1px solid ${shift.color}40`,opacity:locked?.7:1}}
+              onClick={e=>handleClick(e,s.id,ds,locked)}>
+              <div className="d-label" style={{color:shift.color}}>{DAYS_NL[i]}</div>
+              <div className="d-shift" style={{color:shift.color}}>{shift.label}</div>
+              {locked&&<span style={{position:"absolute",top:1,right:2,fontSize:7}}>🔒</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   const regular=staff.filter(s=>!s.isFlexijob);
   const flexi=staff.filter(s=>s.isFlexijob);
 
@@ -1062,7 +1098,12 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
           </div>
         </div>
       )}
-      <div style={{overflowX:"auto"}}>
+      <div className="week-cards">
+        {regular.map(renderCard)}
+        {flexi.length>0&&<div style={{fontSize:10,color:"#6b7280",textTransform:"uppercase",letterSpacing:".1em",margin:"12px 0 6px"}}>Flexijobbers</div>}
+        {flexi.map(renderCard)}
+      </div>
+      <div className="week-table-wrap" style={{overflowX:"auto"}}>
         <table className="week-grid">
           <thead>
             <tr>
