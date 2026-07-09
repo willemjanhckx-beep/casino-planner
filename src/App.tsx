@@ -3,6 +3,18 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 const SUPABASE_URL = "https://edlcobufsarpzakzscpl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGNvYnVmc2FycHpha3pzY3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODI0NDAsImV4cCI6MjA5MjQ1ODQ0MH0.pZcav2FMpqYh2io57F1HGVAuhullZC89KB34qNUxBoQ";
 
+// Elk toestel krijgt één stabiel, willekeurig ID (geen persoonsgegeven) —
+// gebruikt om te herkennen of de laatste sync-wijziging van dit toestel zelf
+// kwam, of van een ander toestel (nodig voor conflictdetectie bij laden).
+function getDeviceId() {
+  let id = localStorage.getItem("co3_device_id");
+  if (!id) {
+    id = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem("co3_device_id", id);
+  }
+  return id;
+}
+
 async function sbGet(key) {
   try {
     // Expliciet sorteren op updated_at + limit 1: mocht er (bv. door een
@@ -12,7 +24,13 @@ async function sbGet(key) {
       { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } });
     const data = await r.json();
     if (!data || data.length === 0) return null;
-    return JSON.parse(data[0].value);
+    const parsed = JSON.parse(data[0].value);
+    // Nieuw formaat: {__meta:{deviceId,savedAt}, data:...}. Oud formaat (vóór
+    // conflictdetectie) is gewoon de rauwe waarde — die blijft werken.
+    if (parsed && typeof parsed === "object" && parsed.__meta) {
+      return { value: parsed.data, deviceId: parsed.__meta.deviceId, savedAt: parsed.__meta.savedAt };
+    }
+    return { value: parsed, deviceId: null, savedAt: data[0].updated_at };
   } catch { return null; }
 }
 async function sbSet(key, value) {
@@ -20,11 +38,12 @@ async function sbSet(key, value) {
     // on_conflict=key is vereist opdat "Prefer: resolution=merge-duplicates"
     // een echte UPDATE doet i.p.v. telkens een nieuwe rij toe te voegen.
     // Vereist de unique constraint uit de SQL-stappen hierboven.
+    const wrapped = { __meta: { deviceId: getDeviceId(), savedAt: new Date().toISOString() }, data: value };
     await fetch(`${SUPABASE_URL}/rest/v1/planner_data?on_conflict=key`, {
       method: "POST",
       headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`,
         "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
-      body: JSON.stringify({ key, value: JSON.stringify(value), updated_at: new Date().toISOString() })
+      body: JSON.stringify({ key, value: JSON.stringify(wrapped), updated_at: new Date().toISOString() })
     });
   } catch {}
 }
@@ -853,12 +872,20 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
     if(lockDateObj&&new Date(ds)<=lockDateObj){ setWarn("🔒 Globaal gelockt."); setTimeout(()=>setWarn(null),2500); return; }
     e.stopPropagation();
-    setPicker({x:e.clientX,y:e.clientY,staffId:sid,dateStr:ds});
+    setPicker({x:e.clientX,y:e.clientY,staffId:sid,dateStr:ds,locked});
   },[lockDate]);
 
   const handleSelect=useCallback((shiftId)=>{
     if(!picker) return;
-    const {staffId,dateStr}=picker;
+    const {staffId,dateStr,locked}=picker;
+    if(locked){
+      // Cel is expliciet vergrendeld (🔒): eerst ontgrendelen via de aparte
+      // optie in de ShiftPicker vóór de shift gewijzigd kan worden — anders
+      // kan een "vergrendelde" cel alsnog per ongeluk overschreven worden.
+      setWarn("🔒 Deze cel is vergrendeld. Ontgrendel eerst.");
+      setTimeout(()=>setWarn(null),2500);
+      return;
+    }
     setSchedule(prev=>({...prev,[staffId]:{...(prev[staffId]||{}),[dateStr]:shiftId}}));
     if(shiftId==="vacation"||shiftId==="sick"){
       setLocks(prev=>({...prev,[lockKey(staffId,dateStr)]:true}));
@@ -1492,13 +1519,31 @@ export default function App(){
   const saveToSheets=useCallback(async()=>{
     try{
       await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
+      save("co3_last_sync_savedAt",new Date().toISOString());
       showToast("✅ Opgeslagen naar Supabase!");
     }catch{ showToast("❌ Fout bij opslaan."); }
   },[staff,schedule,settings,holidays,vacations,locks]);
 
   const loadFromSheets=useCallback(async()=>{
     try{
-      const [sd,sc,se,sh,sv,sl]=await Promise.all([sbGet("staff"),sbGet("schedule"),sbGet("settings"),sbGet("holidays"),sbGet("vacations"),sbGet("locks")]);
+      const [sdR,scR,seR,shR,svR,slR]=await Promise.all([sbGet("staff"),sbGet("schedule"),sbGet("settings"),sbGet("holidays"),sbGet("vacations"),sbGet("locks")]);
+      const sd=sdR?.value, sc=scR?.value, se=seR?.value, sh=shR?.value, sv=svR?.value, sl=slR?.value;
+
+      // Conflictdetectie: als het rooster op Supabase recenter is dan onze
+      // laatste gekende sync én van een ander toestel kwam, waarschuwen we
+      // vóór we lokale (mogelijk ongesynchroniseerde) wijzigingen overschrijven.
+      // Bij oud dataformaat (geen __meta) of bij de allereerste load doen we niets.
+      if(scR&&scR.deviceId&&scR.deviceId!==getDeviceId()){
+        const lastSync=load("co3_last_sync_savedAt",null);
+        if(lastSync&&scR.savedAt&&scR.savedAt>lastSync&&isLoaded.current){
+          const proceed=window.confirm(
+            `⚠️ Het rooster werd op ${new Date(scR.savedAt).toLocaleString("nl-BE")} gewijzigd op een ander toestel.\n\n`+
+            `Doorgaan overschrijft je huidige, mogelijk ongesynchroniseerde wijzigingen. Doorgaan?`
+          );
+          if(!proceed) return;
+        }
+      }
+
       if(sd&&Array.isArray(sd)&&sd.length>0){
         isLoaded.current=false;
         setStaff(sd.map(s=>({...s,id:Number(s.id)})));
@@ -1507,6 +1552,7 @@ export default function App(){
         if(sh) setHolidays(sh);
         if(sv) setVacations(sv);
         if(sl) setLocks(sl);
+        if(scR?.savedAt) save("co3_last_sync_savedAt",scR.savedAt);
         setTimeout(()=>{ isLoaded.current=true; showToast("✅ Data geladen!"); },2000);
       } else { isLoaded.current=true; }
     }catch{ isLoaded.current=true; }
