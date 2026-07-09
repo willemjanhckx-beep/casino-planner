@@ -645,7 +645,12 @@ function enforceNightCap(schedule, staff, year, settings, locks, lockDate) {
   }
 
   staff.filter(s => s.autoSchedule !== false).forEach(s => {
+    // Beginstand van de nachtenreeks bepalen door terug te kijken vóór 1 jan,
+    // zodat een reeks die eind vorig jaar startte correct doorloopt i.p.v.
+    // stil op 0 te herstarten (jaargrens-bug).
     let streak = 0;
+    let d = new Date(year, 0, 1); d.setDate(d.getDate() - 1);
+    while ((schedule[s.id] || {})[toDS(d)] === "nacht") { streak++; d.setDate(d.getDate() - 1); }
     allDays.forEach(ds => {
       const sh = (result[s.id] || {})[ds];
       const isLocked = !!locks[lockKey(s.id, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
@@ -696,6 +701,16 @@ function enforceRestRules(schedule, staff, year, settings, locks, lockDate) {
     !!locks[lockKey(sid, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
 
   staff.filter(s => s.autoSchedule !== false).forEach(s => {
+    // Jaargrens: rust tussen 31/12 (vorig jaar) en 1/1 dit jaar controleren,
+    // anders wordt deze overgang nooit getoetst (allDays bevat enkel dit jaar).
+    const dsPrev = (() => { const d = new Date(year, 0, 1); d.setDate(d.getDate() - 1); return toDS(d); })();
+    const shPrev = (schedule[s.id] || {})[dsPrev], shFirst = result[s.id][allDays[0]];
+    if (shPrev && shFirst && getShift(shPrev).hours > 0 && getShift(shFirst).hours > 0) {
+      const restBoundary = (shiftStart(allDays[0], shFirst) - shiftEnd(dsPrev, shPrev)) / 3600000;
+      if (restBoundary < minRestHours && !isLockedCell(s.id, allDays[0])) {
+        result[s.id][allDays[0]] = "off";
+      }
+    }
     for (let i = 0; i < allDays.length - 1; i++) {
       const dsA = allDays[i], dsB = allDays[i + 1];
       const shA = result[s.id][dsA], shB = result[s.id][dsB];
