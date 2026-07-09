@@ -1617,7 +1617,7 @@ export default function App(){
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
   const [syncStatus,setSyncStatus]=useState({state:"idle",time:null});
-  const [undoSnapshot,setUndoSnapshot]=useState(null);
+  const [undoStack,setUndoStack]=useState([]); // laatste 10 rooster-versies vóór generatie
   const [pendingGen,setPendingGen]=useState(null);
   const [confirmDialog,setConfirmDialog]=useState(null);
   useEffect(()=>{
@@ -1714,7 +1714,7 @@ export default function App(){
 
   const confirmGenerate=useCallback(()=>{
     if(!pendingGen) return;
-    setUndoSnapshot(pendingGen.snapshot);
+    setUndoStack(prev=>[...prev,pendingGen.snapshot].slice(-10));
     setSchedule(pendingGen.result);
     showToast(pendingGen.fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
     triggerMotivatie();
@@ -1730,11 +1730,13 @@ export default function App(){
   },[pendingGen,cancelGenerate]);
 
   const undoGenerate=useCallback(()=>{
-    if(!undoSnapshot) return;
-    setSchedule(undoSnapshot);
-    setUndoSnapshot(null);
-    showToast("⏪ Vorige versie hersteld.");
-  },[undoSnapshot]);
+    setUndoStack(prev=>{
+      if(prev.length===0) return prev;
+      setSchedule(prev[prev.length-1]);
+      showToast(`⏪ Vorige versie hersteld. (${prev.length-1} stap${prev.length-1===1?"":"pen"} nog terug)`);
+      return prev.slice(0,-1);
+    });
+  },[]);
   
   const exportCSV=()=>{
     const dates=[]; for(let m=0;m<12;m++){const dim=new Date(year,m+1,0).getDate();for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d)));}
@@ -1904,9 +1906,9 @@ export default function App(){
               }} disabled={!isAppReady}>
                 🗑 Reset schema {year}
               </button>
-              {undoSnapshot&&(
+              {undoStack.length>0&&(
                 <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={undoGenerate}>
-                  ⏪ Ongedaan maken
+                  ⏪ Ongedaan maken ({undoStack.length})
                 </button>
               )}
               <div style={{marginTop:8,padding:"8px 10px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8}}>
