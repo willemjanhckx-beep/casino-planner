@@ -1275,7 +1275,7 @@ function StaffStats({staff,schedule,year,holidays,migrationHours}){
 }
 
 // ─── STAFF MANAGER ────────────────────────────────────────────────────────────
-function StaffManager({staff,setStaff,schedule,year}){
+function StaffManager({staff,setStaff,schedule,setSchedule,year,locks,setLocks}){
   const [showModal,setShowModal]=useState(false);
   const [editing,setEditing]=useState(null);
   const def={name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true,shiftPrefs:[]};
@@ -1292,7 +1292,21 @@ function StaffManager({staff,setStaff,schedule,year}){
   const toggleDay=(day)=>setForm(f=>({...f,availableDays:f.availableDays.includes(day)?f.availableDays.filter(d=>d!==day):[...f.availableDays,day]}));
   const togglePref=(type)=>setForm(f=>({...f,shiftPrefs:(f.shiftPrefs||[]).includes(type)?f.shiftPrefs.filter(t=>t!==type):[...(f.shiftPrefs||[]),type]}));
   const save=()=>{if(!form.name.trim())return;if(editing){setStaff(p=>p.map(s=>s.id===editing?{...s,...form,fte:parseFloat(form.fte)}:s));}else{setStaff(p=>[...p,{id:Date.now(),...form,fte:parseFloat(form.fte)}]);}setShowModal(false);};
-  const remove=(id)=>{const s=staff.find(x=>x.id===id);if(!window.confirm(`${s?.name||"Deze medewerker"} verwijderen? Dit kan niet ongedaan gemaakt worden.`))return;setStaff(p=>p.filter(x=>x.id!==id));};
+  const [confirmDelete,setConfirmDelete]=useState(null);
+  useEffect(()=>{
+    if(!confirmDelete) return;
+    const onKey=e=>{ if(e.key==="Escape") setConfirmDelete(null); };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[confirmDelete]);
+  const remove=(id)=>{ setConfirmDelete(id); };
+  const doRemove=()=>{
+    const id=confirmDelete;
+    setStaff(p=>p.filter(x=>x.id!==id));
+    setSchedule(prev=>{ const n={...prev}; delete n[id]; return n; });
+    setLocks(prev=>{ const n={...prev}; Object.keys(n).forEach(k=>{ if(k.startsWith(`${id}::`)) delete n[k]; }); return n; });
+    setConfirmDelete(null);
+  };
   const regular=staff.filter(s=>!s.isFlexijob); const flexi=staff.filter(s=>s.isFlexijob);
   const renderSection=(list,title)=>(
     <>
@@ -1321,6 +1335,20 @@ function StaffManager({staff,setStaff,schedule,year}){
       </div>
       {renderSection(regular,"Vaste medewerkers")}
       {flexi.length>0&&renderSection(flexi,"Flexijobbers")}
+      {confirmDelete&&(
+        <div className="modal-overlay" onClick={()=>setConfirmDelete(null)}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{width:340}}>
+            <div className="modal-title">Verwijderen</div>
+            <div style={{fontSize:13,color:"var(--text-dim)",marginBottom:16}}>
+              {staff.find(x=>x.id===confirmDelete)?.name||"Deze medewerker"} verwijderen? Dit kan niet ongedaan gemaakt worden.
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={()=>setConfirmDelete(null)}>Annuleren</button>
+              <button className="btn btn-danger" onClick={doRemove}>Verwijderen</button>
+            </div>
+          </div>
+        </div>
+      )}
       {showModal&&(
         <div className="modal-overlay" onClick={()=>setShowModal(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -1558,6 +1586,13 @@ export default function App(){
   const [syncStatus,setSyncStatus]=useState({state:"idle",time:null});
   const [undoSnapshot,setUndoSnapshot]=useState(null);
   const [pendingGen,setPendingGen]=useState(null);
+  const [confirmDialog,setConfirmDialog]=useState(null);
+  useEffect(()=>{
+    if(!confirmDialog) return;
+    const onKey=e=>{ if(e.key==="Escape") setConfirmDialog(null); };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[confirmDialog]);
   const [isAppReady,setIsAppReady]=useState(false);
   const actionCount=useRef(0);
   const isLoaded=useRef(false);
@@ -1586,7 +1621,12 @@ export default function App(){
     return lockDate>migrationDate?lockDate:migrationDate;
   },[lockDate,migrationDate]);
 
-  const showToast=(msg,type="normal")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
+  const toastTimerRef=useRef(null);
+  const showToast=(msg,type="normal")=>{
+    if(toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({msg,type});
+    toastTimerRef.current=setTimeout(()=>{ setToast(null); toastTimerRef.current=null; },4000);
+  };
 
   const triggerMotivatie=useCallback(()=>{
     if(!motivatieEnabled||motivatieFreq===0) return;
@@ -1791,26 +1831,26 @@ export default function App(){
                 {generating?"⏳ Bezig...":"🎲 Aanvullen (behoud bestaand)"}
               </button>
               <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
-                if(!window.confirm("Volledig herberekenen? Alle niet-gelockte shiften voor "+year+" worden vervangen door een nieuwe, willekeurige verdeling."))return;
-                generateRoster(true);
+                setConfirmDialog({msg:"Volledig herberekenen? Alle niet-gelockte shiften voor "+year+" worden vervangen door een nieuwe, willekeurige verdeling.",onConfirm:()=>generateRoster(true)});
               }} disabled={generating||!isAppReady||!!pendingGen}>
                 {generating?"⏳ Bezig...":"🔁 Volledig herberekenen"}
               </button>
               <button className="btn btn-danger" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
-                if(!window.confirm("Schema wissen voor "+year+"? Vergrendelde cellen (🔒) en data vóór de lock-datum blijven behouden."))return;
-                const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
-                const cleared={};
-                staff.forEach(s=>{
-                  const kept={};
-                  Object.entries(schedule[s.id]||{}).forEach(([ds,sh])=>{
-                    if(!ds.startsWith(String(year))){ kept[ds]=sh; return; }
-                    const isLocked=!!locks[lockKey(s.id,ds)]||(lockDateObj&&new Date(ds)<=lockDateObj);
-                    if(isLocked) kept[ds]=sh;
+                setConfirmDialog({msg:"Schema wissen voor "+year+"? Vergrendelde cellen (🔒) en data vóór de lock-datum blijven behouden.",onConfirm:()=>{
+                  const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
+                  const cleared={};
+                  staff.forEach(s=>{
+                    const kept={};
+                    Object.entries(schedule[s.id]||{}).forEach(([ds,sh])=>{
+                      if(!ds.startsWith(String(year))){ kept[ds]=sh; return; }
+                      const isLocked=!!locks[lockKey(s.id,ds)]||(lockDateObj&&new Date(ds)<=lockDateObj);
+                      if(isLocked) kept[ds]=sh;
+                    });
+                    cleared[s.id]=kept;
                   });
-                  cleared[s.id]=kept;
-                });
-                setSchedule(prev=>({...prev,...cleared}));
-                showToast("🗑 Schema gewist voor "+year+" (locks behouden)");
+                  setSchedule(prev=>({...prev,...cleared}));
+                  showToast("🗑 Schema gewist voor "+year+" (locks behouden)");
+                }});
               }} disabled={!isAppReady}>
                 🗑 Reset schema {year}
               </button>
@@ -1859,7 +1899,7 @@ export default function App(){
             {view==="week"&&<WeekView staff={staff} schedule={schedule} setSchedule={setSchedule} weekNum={weekNum} year={year} settings={settings} holidays={holidays} vacations={vacations} locks={locks} setLocks={setLocks} lockDate={effectiveLockDate} migrationHours={migrationHours} onNavigateAlert={handleNavigateAlert}/>}
             {view==="year"&&<YearView schedule={schedule} staff={staff} year={year} holidays={holidays} vacations={vacations} settings={settings} onDayClick={ds=>{setWeekNum(getISOWeek(new Date(ds)));setView("week");}}/>}
             {view==="stats"&&<StaffStats staff={staff} schedule={schedule} year={year} holidays={holidays} migrationHours={migrationHours}/>}
-            {view==="staff"&&<StaffManager staff={staff} setStaff={setStaff} schedule={schedule} year={year}/>}
+            {view==="staff"&&<StaffManager staff={staff} setStaff={setStaff} schedule={schedule} setSchedule={setSchedule} year={year} locks={locks} setLocks={setLocks}/>}
             {view==="settings"&&<SettingsView settings={settings} setSettings={setSettings} holidays={holidays} setHolidays={setHolidays} vacations={vacations} setVacations={setVacations} lockDate={lockDate} setLockDate={setLockDate} motivatieEnabled={motivatieEnabled} setMotivatieEnabled={setMotivatieEnabled} motivatieFreq={motivatieFreq} setMotivatieFreq={setMotivatieFreq} showToast={showToast} staff={staff} migrationDate={migrationDate} setMigrationDate={setMigrationDate} migrationHours={migrationHours} setMigrationHours={setMigrationHours}/>}
             {view==="storage"&&<StorageView onExport={exportJSON} onImport={importJSON} onSaveToSheets={saveToSheets} onLoadFromSheets={loadFromSheets}/>}
           </div>
@@ -1869,6 +1909,18 @@ export default function App(){
         {toast.type==="motivatie"&&<div style={{fontSize:10,textTransform:"uppercase",letterSpacing:".12em",marginBottom:6,opacity:.8,display:"flex",alignItems:"center",gap:6}}><span style={{animation:"spin 3s linear infinite",display:"inline-block"}}>🎰</span> Bericht voor Rami</div>}
         {toast.msg}
       </div>}
+      {confirmDialog&&(
+        <div className="modal-overlay" onClick={()=>setConfirmDialog(null)}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{width:360}}>
+            <div className="modal-title">Bevestigen</div>
+            <div style={{fontSize:13,color:"var(--text-dim)",marginBottom:16}}>{confirmDialog.msg}</div>
+            <div className="modal-actions">
+              <button className="btn" onClick={()=>setConfirmDialog(null)}>Annuleren</button>
+              <button className="btn btn-danger" onClick={()=>{confirmDialog.onConfirm();setConfirmDialog(null);}}>Bevestigen</button>
+            </div>
+          </div>
+        </div>
+      )}
       {pendingGen&&(
         <div className="modal-overlay" onClick={cancelGenerate}>
           <div className="modal" onClick={e=>e.stopPropagation()} style={{width:360}}>
