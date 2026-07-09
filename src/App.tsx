@@ -724,6 +724,7 @@ const style=`
 :root{--gold:#c9a84c;--gold-dim:#8a6f2e;--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a28;--surface3:#22223a;--border:#2a2a42;--text:#e8e8f0;--text-dim:#888899;--red:#ef4444;--yellow:#f59e0b;--green:#22c55e;--blue:#3b82f6;--purple:#8b5cf6;}
 body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
 ::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px;border-radius:4px;}
 .app{display:flex;height:100vh;overflow:hidden;}
 .sidebar{width:224px;min-width:224px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:transform .25s ease;}
 @media(max-width:768px){.sidebar{position:fixed;top:0;left:0;height:100vh;z-index:300;transform:translateX(-100%);}.sidebar.open{transform:translateX(0);}.main{width:100%;}}
@@ -841,7 +842,13 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 `;
 // ─── SHIFT PICKER ─────────────────────────────────────────────────────────────
 function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
-  useEffect(()=>{ const h=()=>onClose(); window.addEventListener("click",h); return()=>window.removeEventListener("click",h); },[onClose]);
+  useEffect(()=>{
+    const h=()=>onClose();
+    const onKey=e=>{ if(e.key==="Escape") onClose(); };
+    window.addEventListener("click",h);
+    window.addEventListener("keydown",onKey);
+    return()=>{ window.removeEventListener("click",h); window.removeEventListener("keydown",onKey); };
+  },[onClose]);
   const shiftOpts = ["dag","avond","nacht","off","vacation","sick"];
   return(
     <div className="shift-picker" style={{top:Math.min(pos.y,window.innerHeight-320),left:Math.min(pos.x,window.innerWidth-220)}} onClick={e=>e.stopPropagation()}>
@@ -918,6 +925,13 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
     setLocks(prev=>({...prev,[k]:!prev[k]}));
   },[picker,setLocks]);
 
+  useEffect(()=>{
+    if(!bulkOpen) return;
+    const onKey=e=>{ if(e.key==="Escape") setBulkOpen(false); };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[bulkOpen]);
+
   const applyBulk=useCallback(()=>{
     const {staffId,from,to,shiftType}=bulkForm;
     if(!staffId||!from||!to||from>to) return;
@@ -979,9 +993,11 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
         const locked=isLocked||isPastLock;
         return(
           <td key={i} style={{padding:3}}>
-            <div className={`shift-cell${locked?" locked":""}`}
+            <div className={`shift-cell${locked?" locked":""}`} role="button" tabIndex={0}
+              aria-label={`${s.name} ${ds}: ${shift.label}`}
               style={{background:shift.bg,borderLeft:`3px solid ${shift.color}`,opacity:locked?.85:1}}
-              onClick={e=>handleClick(e,s.id,ds,locked)}>
+              onClick={e=>handleClick(e,s.id,ds,locked)}
+              onKeyDown={e=>onKeyActivate(e,()=>handleClick(e,s.id,ds,locked))}>
               <div className="shift-label" style={{color:shift.color}}>{shift.label}</div>
               {shift.time&&<div className="shift-time">{shift.time}</div>}
             </div>
@@ -1008,8 +1024,11 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
           const isPastLock=lockDate&&new Date(ds)<=new Date(lockDate+"T23:59:59");
           const locked=isLocked||isPastLock;
           return(
-            <div key={i} className="staff-card-day" style={{background:shift.bg,border:`1px solid ${shift.color}40`,opacity:locked?.7:1}}
-              onClick={e=>handleClick(e,s.id,ds,locked)}>
+            <div key={i} className="staff-card-day" role="button" tabIndex={0}
+              aria-label={`${s.name} ${ds}: ${shift.label}`}
+              style={{background:shift.bg,border:`1px solid ${shift.color}40`,opacity:locked?.7:1}}
+              onClick={e=>handleClick(e,s.id,ds,locked)}
+              onKeyDown={e=>onKeyActivate(e,()=>handleClick(e,s.id,ds,locked))}>
               <div className="d-label" style={{color:shift.color}}>{DAYS_NL[i]}</div>
               <div className="d-shift" style={{color:shift.color}}>{shift.label}</div>
               {locked&&<span style={{position:"absolute",top:1,right:2,fontSize:7}}>🔒</span>}
@@ -1040,7 +1059,9 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
                 return(
                   <div key={i} style={{borderTop:i>0?"1px solid #7f1d1d30":"none"}}>
                     <div style={{padding:"7px 14px",fontSize:12,color:"#fca5a5",display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{flex:1,cursor:"pointer"}} onClick={()=>onNavigateAlert&&onNavigateAlert(a.ds)}>
+                      <span style={{flex:1,cursor:"pointer"}} role="button" tabIndex={0}
+                        onClick={()=>onNavigateAlert&&onNavigateAlert(a.ds)}
+                        onKeyDown={e=>onKeyActivate(e,()=>onNavigateAlert&&onNavigateAlert(a.ds))}>
                         🔴 {a.msg} <span style={{opacity:.6,fontSize:10}}>→</span>
                       </span>
                       <button className="btn" style={{padding:"2px 8px",fontSize:11,flexShrink:0}}
@@ -1260,6 +1281,12 @@ function StaffManager({staff,setStaff,schedule,year}){
   const def={name:"",fte:1.0,color:"#3b82f6",vacationDays:24,availableDays:[0,1,2,3,4,5,6],partTimeMode:"spread",isFlexijob:false,autoSchedule:true,shiftPrefs:[]};
   const [form,setForm]=useState(def);
   const openAdd=()=>{setEditing(null);setForm(def);setShowModal(true);};
+  useEffect(()=>{
+    if(!showModal) return;
+    const onKey=e=>{ if(e.key==="Escape") setShowModal(false); };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[showModal]);
   const openEdit=(s)=>{setEditing(s.id);setForm({name:s.name,fte:s.fte,color:s.color,vacationDays:s.vacationDays,availableDays:[...s.availableDays],partTimeMode:s.partTimeMode||"spread",isFlexijob:s.isFlexijob||false,autoSchedule:s.autoSchedule!==false,shiftPrefs:[...(s.shiftPrefs||[])]});setShowModal(true);};
   const handleFteChange=(v)=>{const f=parseFloat(v);setForm(x=>({...x,fte:f,vacationDays:FTE_VACATION[f]??Math.round(24*f)}));};
   const toggleDay=(day)=>setForm(f=>({...f,availableDays:f.availableDays.includes(day)?f.availableDays.filter(d=>d!==day):[...f.availableDays,day]}));
@@ -1615,7 +1642,13 @@ export default function App(){
     setPendingGen(null);
   },[pendingGen,triggerMotivatie]);
 
-  const cancelGenerate=useCallback(()=>setPendingGen(null),[]);
+ const cancelGenerate=useCallback(()=>setPendingGen(null),[]);
+  useEffect(()=>{
+    if(!pendingGen) return;
+    const onKey=e=>{ if(e.key==="Escape") cancelGenerate(); };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[pendingGen,cancelGenerate]);
 
   const undoGenerate=useCallback(()=>{
     if(!undoSnapshot) return;
@@ -1832,7 +1865,7 @@ export default function App(){
           </div>
         </div>
       </div>
-      {toast&&<div className={`toast ${toast.type==="motivatie"?"motivatie":""}`}>
+      {toast&&<div className={`toast ${toast.type==="motivatie"?"motivatie":""}`} role="status" aria-live="polite">
         {toast.type==="motivatie"&&<div style={{fontSize:10,textTransform:"uppercase",letterSpacing:".12em",marginBottom:6,opacity:.8,display:"flex",alignItems:"center",gap:6}}><span style={{animation:"spin 3s linear infinite",display:"inline-block"}}>🎰</span> Bericht voor Rami</div>}
         {toast.msg}
       </div>}
