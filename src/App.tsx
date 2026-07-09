@@ -1517,6 +1517,7 @@ export default function App(){
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
   const [syncStatus,setSyncStatus]=useState({state:"idle",time:null});
   const [undoSnapshot,setUndoSnapshot]=useState(null);
+  const [pendingGen,setPendingGen]=useState(null);
   const [isAppReady,setIsAppReady]=useState(false);
   const actionCount=useRef(0);
   const isLoaded=useRef(false);
@@ -1568,6 +1569,16 @@ export default function App(){
     showToast(`📍 Genavigeerd naar ${ds}`);
   },[]);
 
+  const countDiff=(before,after)=>{
+    let changed=0,staffTouched=new Set();
+    staff.forEach(s=>{
+      const b=before[s.id]||{},a=after[s.id]||{};
+      const keys=new Set([...Object.keys(b),...Object.keys(a)]);
+      keys.forEach(ds=>{ if((b[ds]||"off")!==(a[ds]||"off")){ changed++; staffTouched.add(s.id); } });
+    });
+    return {changed,staffCount:staffTouched.size};
+  };
+
   const generateRoster=useCallback((fullReset=false)=>{
     setGenerating(true);
     const snapshot=schedule;
@@ -1576,13 +1587,22 @@ export default function App(){
       const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, effectiveLockDate, migrationHours);
       const capped = enforceNightCap(repaired, staff, year, settings, locks, effectiveLockDate);
       const rested = enforceRestRules(capped, staff, year, settings, locks, effectiveLockDate);
-      setUndoSnapshot(snapshot);
-      setSchedule(rested);
+      const diff=countDiff(snapshot,rested);
+      setPendingGen({snapshot,result:rested,fullReset,diff});
       setGenerating(false);
-      showToast(fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
-      triggerMotivatie();
     },600);
-  },[staff,year,settings,holidays,vacations,schedule,locks,effectiveLockDate,migrationHours,triggerMotivatie]);
+  },[staff,year,settings,holidays,vacations,schedule,locks,effectiveLockDate,migrationHours]);
+
+  const confirmGenerate=useCallback(()=>{
+    if(!pendingGen) return;
+    setUndoSnapshot(pendingGen.snapshot);
+    setSchedule(pendingGen.result);
+    showToast(pendingGen.fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
+    triggerMotivatie();
+    setPendingGen(null);
+  },[pendingGen,triggerMotivatie]);
+
+  const cancelGenerate=useCallback(()=>setPendingGen(null),[]);
 
   const undoGenerate=useCallback(()=>{
     if(!undoSnapshot) return;
@@ -1721,13 +1741,13 @@ export default function App(){
             </div>
             <div className="nav-section">
               <div className="nav-label">Acties</div>
-              <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>generateRoster(false)} disabled={generating||!isAppReady}>
+              <button className="btn btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>generateRoster(false)} disabled={generating||!isAppReady||!!pendingGen}>
                 {generating?"⏳ Bezig...":"🎲 Aanvullen (behoud bestaand)"}
               </button>
               <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
                 if(!window.confirm("Volledig herberekenen? Alle niet-gelockte shiften voor "+year+" worden vervangen door een nieuwe, willekeurige verdeling."))return;
                 generateRoster(true);
-              }} disabled={generating||!isAppReady}>
+              }} disabled={generating||!isAppReady||!!pendingGen}>
                 {generating?"⏳ Bezig...":"🔁 Volledig herberekenen"}
               </button>
               <button className="btn btn-danger" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={()=>{
@@ -1803,6 +1823,30 @@ export default function App(){
         {toast.type==="motivatie"&&<div style={{fontSize:10,textTransform:"uppercase",letterSpacing:".12em",marginBottom:6,opacity:.8,display:"flex",alignItems:"center",gap:6}}><span style={{animation:"spin 3s linear infinite",display:"inline-block"}}>🎰</span> Bericht voor Rami</div>}
         {toast.msg}
       </div>}
+      {pendingGen&&(
+        <div className="modal-overlay" onClick={cancelGenerate}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{width:360}}>
+            <div className="modal-title">Voorbeeld van wijzigingen</div>
+            <div style={{fontSize:13,color:"var(--text-dim)",marginBottom:12}}>
+              Deze generatie ({pendingGen.fullReset?"volledig herberekenen":"aanvullen"}) verandert:
+            </div>
+            <div style={{display:"flex",gap:16,marginBottom:16}}>
+              <div style={{flex:1,background:"var(--surface2)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                <div style={{fontSize:22,fontFamily:"'IBM Plex Mono',monospace",color:"var(--gold)"}}>{pendingGen.diff.changed}</div>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>cellen</div>
+              </div>
+              <div style={{flex:1,background:"var(--surface2)",borderRadius:8,padding:"10px 14px",textAlign:"center"}}>
+                <div style={{fontSize:22,fontFamily:"'IBM Plex Mono',monospace",color:"var(--gold)"}}>{pendingGen.diff.staffCount}</div>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>medewerkers</div>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={cancelGenerate}>Annuleren</button>
+              <button className="btn btn-primary" onClick={confirmGenerate}>✅ Toepassen</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
