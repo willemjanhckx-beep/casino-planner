@@ -157,6 +157,68 @@ function isAvailOnDate(s,ds,isoWeek){
 function getWeeksInYear(y){ return getISOWeek(new Date(y,11,28)); }
 function lockKey(sid,ds){ return `${sid}::${ds}`; }
 
+// Geeft de best passende kandidaten terug om een concreet tekort op een
+// bepaalde dag en shifttype op te vullen. Filtert op: niet al ingepland die
+// dag, niet gelockt, beschikbaar volgens rooster, voldoende rust vóór/ná de
+// shift, en (bij nacht) de nachtenlimiet niet zou overschrijden. Sorteert op
+// wie het verst achterloopt op zijn jaar-uren (eerlijkheid).
+function suggestStaffForShift(ds, shiftType, staff, schedule, settings, locks, lockDate) {
+  const lockDateObj = lockDate ? new Date(lockDate + "T23:59:59") : null;
+  const isoWeek = getISOWeek(new Date(ds));
+  const maxConsecNights = Math.max(1, settings.maxConsecNights || 4);
+  const minRestHours = Math.max(0, settings.minRestHours || 0);
+
+  const prevDs = (() => { const d = new Date(ds); d.setDate(d.getDate() - 1); return toDS(d); })();
+  const nextDs = (() => { const d = new Date(ds); d.setDate(d.getDate() + 1); return toDS(d); })();
+
+  const candidates = staff.filter(s => {
+    const existing = (schedule[s.id] || {})[ds];
+    if (existing && existing !== "off") return false; // al ingepland die dag
+    const isLocked = !!locks[lockKey(s.id, ds)] || (lockDateObj && new Date(ds) <= lockDateObj);
+    if (isLocked) return false;
+    if (!isAvailOnDate(s, ds, isoWeek)) return false;
+
+    const prevSh = (schedule[s.id] || {})[prevDs];
+    if (prevSh && getShift(prevSh).hours > 0) {
+      const rest = (shiftStart(ds, shiftType) - shiftEnd(prevDs, prevSh)) / 3600000;
+      if (rest < minRestHours) return false;
+    }
+    const nextSh = (schedule[s.id] || {})[nextDs];
+    if (nextSh && getShift(nextSh).hours > 0) {
+      const rest = (shiftStart(nextDs, nextSh) - shiftEnd(ds, shiftType)) / 3600000;
+      if (rest < minRestHours) return false;
+    }
+
+    if (shiftType === "nacht") {
+      let streak = 1, d = new Date(ds);
+      for (;;) {
+        d.setDate(d.getDate() - 1);
+        if ((schedule[s.id] || {})[toDS(d)] !== "nacht") break;
+        streak++;
+      }
+      if (streak > maxConsecNights) return false;
+    }
+    return true;
+  });
+
+  const hoursOf = (s) => {
+    let h = 0;
+    Object.values(schedule[s.id] || {}).forEach(sh => { h += getShift(sh).hours; });
+    return h;
+  };
+
+  return candidates
+    .map(s => {
+      const target = getTargetHours(s);
+      const hours = hoursOf(s);
+      const pace = target === Infinity ? 0 : hours / Math.max(target, 1);
+      return { s, pace };
+    })
+    .sort((a, b) => a.pace - b.pace)
+    .slice(0, 5)
+    .map(x => x.s);
+}
+
 // Geeft een gewicht terug voor een shifttype op basis van de persoonlijke
 // voorkeur van de medewerker. Geen voorkeur ingesteld -> neutraal (1) voor elk
 // type. Wél voorkeur ingesteld -> aangevinkte types wegen zwaarder, de rest
@@ -776,7 +838,13 @@ function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
 function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vacations,locks,setLocks,lockDate,onNavigateAlert}){
   const [picker,setPicker]=useState(null);
   const [warn,setWarn]=useState(null);
+  const [suggestFor,setSuggestFor]=useState(null);
   const dates=getWeekDates(year,weekNum);
+
+  const assignSuggestion=useCallback((sid,ds,shiftType)=>{
+    setSchedule(prev=>({...prev,[sid]:{...(prev[sid]||{}),[ds]:shiftType}}));
+    setSuggestFor(null);
+  },[setSchedule]);
 
   const handleClick=useCallback((e,sid,ds,locked)=>{
     const lockDateObj=lockDate?new Date(lockDate+"T23:59:59"):null;
@@ -817,9 +885,9 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
   const alerts=[];
   coverage.forEach(c=>{
     const date=new Date(c.ds); const di=(date.getDay()+6)%7;
-    if(c.dag<c.demDag)     alerts.push({msg:`Dag tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.dag}/${c.demDag})`,ds:c.ds});
-    if(c.avond<c.demAvond) alerts.push({msg:`Avond tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.avond}/${c.demAvond})`,ds:c.ds});
-    if(c.nacht<c.demNacht) alerts.push({msg:`Nacht tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.nacht}/${c.demNacht})`,ds:c.ds});
+    if(c.dag<c.demDag)     alerts.push({msg:`Dag tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.dag}/${c.demDag})`,ds:c.ds,shiftType:"dag"});
+    if(c.avond<c.demAvond) alerts.push({msg:`Avond tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.avond}/${c.demAvond})`,ds:c.ds,shiftType:"avond"});
+    if(c.nacht<c.demNacht) alerts.push({msg:`Nacht tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.nacht}/${c.demNacht})`,ds:c.ds,shiftType:"nacht"});
   });
   const [alertsOpen,setAlertsOpen]=useState(false);
 
@@ -866,12 +934,42 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
           </div>
           {alertsOpen&&(
             <div style={{background:"#7f1d1d18",border:"1px solid #7f1d1d",borderTop:"none",borderRadius:"0 0 8px 8px"}}>
-              {alerts.map((a,i)=>(
-                <div key={i} style={{padding:"7px 14px",fontSize:12,color:"#fca5a5",borderTop:i>0?"1px solid #7f1d1d30":"none",cursor:"pointer"}}
-                  onClick={()=>onNavigateAlert&&onNavigateAlert(a.ds)}>
-                  🔴 {a.msg} <span style={{opacity:.6,fontSize:10}}>→</span>
-                </div>
-              ))}
+              {alerts.map((a,i)=>{
+                const isOpen=suggestFor===i;
+                const suggestions=isOpen?suggestStaffForShift(a.ds,a.shiftType,staff,schedule,settings,locks,lockDate):[];
+                return(
+                  <div key={i} style={{borderTop:i>0?"1px solid #7f1d1d30":"none"}}>
+                    <div style={{padding:"7px 14px",fontSize:12,color:"#fca5a5",display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{flex:1,cursor:"pointer"}} onClick={()=>onNavigateAlert&&onNavigateAlert(a.ds)}>
+                        🔴 {a.msg} <span style={{opacity:.6,fontSize:10}}>→</span>
+                      </span>
+                      <button className="btn" style={{padding:"2px 8px",fontSize:11,flexShrink:0}}
+                        onClick={()=>setSuggestFor(isOpen?null:i)}>
+                        {isOpen?"✕":"💡 Suggesties"}
+                      </button>
+                    </div>
+                    {isOpen&&(
+                      <div style={{padding:"4px 14px 10px 28px",display:"flex",flexDirection:"column",gap:4}}>
+                        {suggestions.length===0&&(
+                          <div style={{fontSize:11,color:"var(--text-dim)",fontStyle:"italic"}}>
+                            Geen geschikte kandidaten (beschikbaarheid, rust of nachtenlimiet blokkeert iedereen).
+                          </div>
+                        )}
+                        {suggestions.map(s=>(
+                          <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,padding:"4px 8px",background:"var(--surface2)",borderRadius:6}}>
+                            <span className="staff-dot" style={{background:s.color}}/>
+                            <span style={{flex:1,color:"var(--text)"}}>{s.name}</span>
+                            <button className="btn btn-primary" style={{padding:"2px 10px",fontSize:11}}
+                              onClick={()=>assignSuggestion(s.id,a.ds,a.shiftType)}>
+                              + Toewijzen
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
