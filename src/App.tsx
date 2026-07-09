@@ -1475,6 +1475,7 @@ export default function App(){
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
   const [syncStatus,setSyncStatus]=useState({state:"idle",time:null});
+  const [undoSnapshot,setUndoSnapshot]=useState(null);
   const [isAppReady,setIsAppReady]=useState(false);
   const actionCount=useRef(0);
   const isLoaded=useRef(false);
@@ -1528,17 +1529,26 @@ export default function App(){
 
   const generateRoster=useCallback((fullReset=false)=>{
     setGenerating(true);
+    const snapshot=schedule;
     setTimeout(()=>{
       const {schedule:generated} = generateSchedule(staff,year,settings,holidays,vacations,schedule,locks,effectiveLockDate,fullReset,migrationHours);
       const repaired = repairScheduleFairness(generated, staff, year, settings, holidays, vacations, locks, effectiveLockDate, migrationHours);
       const capped = enforceNightCap(repaired, staff, year, settings, locks, effectiveLockDate);
       const rested = enforceRestRules(capped, staff, year, settings, locks, effectiveLockDate);
+      setUndoSnapshot(snapshot);
       setSchedule(rested);
       setGenerating(false);
       showToast(fullReset?"✅ Rooster volledig herberekend en geoptimaliseerd!":"✅ Rooster aangevuld en geoptimaliseerd!");
       triggerMotivatie();
     },600);
   },[staff,year,settings,holidays,vacations,schedule,locks,effectiveLockDate,migrationHours,triggerMotivatie]);
+
+  const undoGenerate=useCallback(()=>{
+    if(!undoSnapshot) return;
+    setSchedule(undoSnapshot);
+    setUndoSnapshot(null);
+    showToast("⏪ Vorige versie hersteld.");
+  },[undoSnapshot]);
   
   const exportCSV=()=>{
     const dates=[]; for(let m=0;m<12;m++){const dim=new Date(year,m+1,0).getDate();for(let d=1;d<=dim;d++) dates.push(toDS(new Date(year,m,d)));}
@@ -1697,6 +1707,11 @@ export default function App(){
               }} disabled={!isAppReady}>
                 🗑 Reset schema {year}
               </button>
+              {undoSnapshot&&(
+                <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:6}} onClick={undoGenerate}>
+                  ⏪ Ongedaan maken
+                </button>
+              )}
               <div style={{marginTop:8,padding:"8px 10px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8}}>
                 <div style={{fontSize:10,color:"var(--text-dim)",textTransform:"uppercase",letterSpacing:".1em",marginBottom:4}}>🔒 Lock tot datum</div>
                 <input type="date" value={lockDate||""} onChange={e=>setLockDate(e.target.value||null)}
