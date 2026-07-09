@@ -1159,7 +1159,7 @@ function StaffManager({staff,setStaff,schedule,year}){
   const toggleDay=(day)=>setForm(f=>({...f,availableDays:f.availableDays.includes(day)?f.availableDays.filter(d=>d!==day):[...f.availableDays,day]}));
   const togglePref=(type)=>setForm(f=>({...f,shiftPrefs:(f.shiftPrefs||[]).includes(type)?f.shiftPrefs.filter(t=>t!==type):[...(f.shiftPrefs||[]),type]}));
   const save=()=>{if(!form.name.trim())return;if(editing){setStaff(p=>p.map(s=>s.id===editing?{...s,...form,fte:parseFloat(form.fte)}:s));}else{setStaff(p=>[...p,{id:Date.now(),...form,fte:parseFloat(form.fte)}]);}setShowModal(false);};
-  const remove=(id)=>setStaff(p=>p.filter(s=>s.id!==id));
+  const remove=(id)=>{const s=staff.find(x=>x.id===id);if(!window.confirm(`${s?.name||"Deze medewerker"} verwijderen? Dit kan niet ongedaan gemaakt worden.`))return;setStaff(p=>p.filter(x=>x.id!==id));};
   const regular=staff.filter(s=>!s.isFlexijob); const flexi=staff.filter(s=>s.isFlexijob);
   const renderSection=(list,title)=>(
     <>
@@ -1263,7 +1263,7 @@ const DEFAULT_SETTINGS={
 
 function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVacations,lockDate,setLockDate,motivatieEnabled,setMotivatieEnabled,motivatieFreq,setMotivatieFreq,showToast,staff,migrationDate,setMigrationDate,migrationHours,setMigrationHours}){
   const [newH,setNewH]=useState(""); const [nVN,setNVN]=useState(""); const [nVS,setNVS]=useState(""); const [nVE,setNVE]=useState("");
-  const upd=(k,v)=>setSettings(s=>({...s,[k]:parseFloat(v)||v}));
+  const upd=(k,v)=>{const n=parseFloat(v);setSettings(s=>({...s,[k]:Number.isNaN(n)?s[k]:n}));};
   const freqLabels=["Nooit","Zelden","Normaal","Vaak"];
   return(
     <div>
@@ -1422,6 +1422,7 @@ export default function App(){
   const [toast,setToast]=useState(null);
   const [motivatieEnabled,setMotivatieEnabled]=useState(()=>load("co3_motiv_on",true));
   const [motivatieFreq,setMotivatieFreq]=useState(()=>load("co3_motiv_freq",1));
+  const [syncStatus,setSyncStatus]=useState({state:"idle",time:null});
   const [isAppReady,setIsAppReady]=useState(false);
   const actionCount=useRef(0);
   const isLoaded=useRef(false);
@@ -1517,11 +1518,13 @@ export default function App(){
   };
 
   const saveToSheets=useCallback(async()=>{
+    setSyncStatus({state:"saving",time:null});
     try{
       await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
       save("co3_last_sync_savedAt",new Date().toISOString());
+      setSyncStatus({state:"saved",time:new Date()});
       showToast("✅ Opgeslagen naar Supabase!");
-    }catch{ showToast("❌ Fout bij opslaan."); }
+    }catch{ setSyncStatus({state:"error",time:null}); showToast("❌ Fout bij opslaan."); }
   },[staff,schedule,settings,holidays,vacations,locks]);
 
   const loadFromSheets=useCallback(async()=>{
@@ -1565,7 +1568,11 @@ export default function App(){
   useEffect(()=>{
     if(!isLoaded.current) return;
     const t=setTimeout(async()=>{
-      try{ await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]); }catch{}
+      setSyncStatus({state:"saving",time:null});
+      try{
+        await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
+        setSyncStatus({state:"saved",time:new Date()});
+      }catch{ setSyncStatus({state:"error",time:null}); }
     },2000);
     return()=>clearTimeout(t);
   },[staff,schedule,settings,holidays,vacations,locks]);
@@ -1657,6 +1664,11 @@ export default function App(){
             <button className="hamburger" onClick={()=>setSidebarOpen(o=>!o)}>☰</button>
             <div className="topbar-title">{{week:weekLabel,year:`Jaaroverzicht ${year}`,stats:"Personeelsstatistieken",staff:"Personeelsbeheer",settings:"Instellingen",storage:"Opslag & Backup"}[view]}</div>
             <div className="topbar-actions">
+              <span style={{fontSize:11,color:syncStatus.state==="error"?"var(--red)":"var(--text-dim)",display:"flex",alignItems:"center",gap:4,fontFamily:"'IBM Plex Mono',monospace"}}>
+                {syncStatus.state==="saving"&&"⏳ opslaan..."}
+                {syncStatus.state==="saved"&&`✅ ${syncStatus.time?syncStatus.time.toLocaleTimeString("nl-BE",{hour:"2-digit",minute:"2-digit"}):""}`}
+                {syncStatus.state==="error"&&"❌ sync mislukt"}
+              </span>
               <select className="year-select" value={year} onChange={e=>handleYearChange(e.target.value)}>
                 {YEAR_RANGE.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
