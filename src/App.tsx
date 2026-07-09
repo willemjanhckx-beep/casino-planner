@@ -136,10 +136,10 @@ function isWeekend(date){ const d=date.getDay(); return d===0||d===6; }
 function getDayDemand(ds,settings,holidays,vacations){
   const date=new Date(ds); const dow=date.getDay();
   if(isHoliday(ds,holidays)||isSchoolVacation(ds,vacations))
-    return {morning:settings.vacMinMorning,evening:settings.vacMinEvening};
+    return {morning:settings.vacMinMorning,evening:settings.vacMinEvening,night:settings.vacMinNight};
   if(dow===5||dow===0||dow===6)
-    return {morning:settings.weekendMinMorning,evening:settings.weekendMinEvening};
-  return {morning:settings.minMorning,evening:settings.minEvening};
+    return {morning:settings.weekendMinMorning,evening:settings.weekendMinEvening,night:settings.weekendMinNight};
+  return {morning:settings.minMorning,evening:settings.minEvening,night:settings.minNight};
 }
 function countVacDays(sid,schedule,year){
   return Object.entries(schedule[sid]||{}).filter(([ds,sh])=>ds.startsWith(String(year))&&sh==="vacation").length;
@@ -227,18 +227,20 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
 
   // Bezettingsnood per dag ("vroeg" = dag+avond, "laat" = nacht), afgeleid van
   // wat al vaststaat (locks / historie). Wordt live bijgewerkt tijdens het toewijzen.
-  const dagNeed = {}, avondNeed = {};
+  const dagNeed = {}, avondNeed = {}, nachtNeed = {};
   allDays.forEach(ds => {
     const locked = lockDateObj && new Date(ds) <= lockDateObj;
     const demand = getDayDemand(ds, settings, holidays, vacations);
-    let vroeg = 0, laat = 0;
+    let dagCnt = 0, avondCnt = 0, nachtCnt = 0;
     autoStaff.forEach(s => {
       const ex = (schedule[s.id] || {})[ds];
-      if (ex === "dag" || ex === "avond") vroeg++;
-      if (ex === "nacht") laat++;
+      if (ex === "dag")   dagCnt++;
+      if (ex === "avond") avondCnt++;
+      if (ex === "nacht") nachtCnt++;
     });
-    dagNeed[ds]   = locked ? 0 : Math.max(0, demand.morning - vroeg);
-    avondNeed[ds] = locked ? 0 : Math.max(0, demand.evening - laat);
+    dagNeed[ds]   = locked ? 0 : Math.max(0, demand.morning - dagCnt);
+    avondNeed[ds] = locked ? 0 : Math.max(0, demand.evening - avondCnt);
+    nachtNeed[ds] = locked ? 0 : Math.max(0, demand.night   - nachtCnt);
   });
 
   // Streefblok (werkdagen/rustdagen) per contracttype
@@ -326,40 +328,29 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
       ]);
       const dagTekort    = dagNeed[ds]   > 0;
       const avondTekort  = avondNeed[ds] > 0;
+      const nachtTekort  = nachtNeed[ds] > 0;
       const nightBlocked = nightStreak >= maxConsecOverride;
 
       let shiftType;
-      if (dagTekort && !avondTekort) {
-        shiftType = weightedPick([
-          { value: "dag",   weight: 2 * prefWeight(s, "dag") },
-          { value: "avond", weight: 2 * prefWeight(s, "avond") },
-          { value: "nacht", weight: 1 * prefWeight(s, "nacht") },
-        ]);
-        if (shiftType === "nacht" && nightBlocked) {
-          shiftType = weightedPick([
-            { value: "dag",   weight: prefWeight(s, "dag") },
-            { value: "avond", weight: prefWeight(s, "avond") },
-          ]);
-        }
-      } else if (avondTekort && !dagTekort) {
-        // Bezetting heeft hier voorrang: nacht is het enige type dat de
-        // avondnood dekt, dus voorkeur speelt bewust geen rol in deze tak.
+      if (nachtTekort && !dagTekort && !avondTekort) {
+        // Enkel de nachtshift heeft nog nood: als deze persoon aan zijn
+        // nachtenlimiet zit, is er hier niets voor hem te doen — een andere
+        // collega (zonder nightBlocked) vangt dit beter op.
         shiftType = nightBlocked ? null : "nacht";
-      } else if (dagTekort && avondTekort) {
-        const preferNight = avondNeed[ds] >= dagNeed[ds] && !nightBlocked;
-        shiftType = preferNight
-          ? "nacht"
-          : weightedPick([
-              { value: "dag",   weight: prefWeight(s, "dag") },
-              { value: "avond", weight: prefWeight(s, "avond") },
-            ]);
       } else {
-        shiftType = (rotationSuggestion === "nacht" && nightBlocked)
-          ? weightedPick([
-              { value: "dag",   weight: prefWeight(s, "dag") },
-              { value: "avond", weight: prefWeight(s, "avond") },
-            ])
-          : rotationSuggestion;
+        const candidates = [
+          { value: "dag",   weight: (dagTekort   ? 3 : 1) * prefWeight(s, "dag") },
+          { value: "avond", weight: (avondTekort ? 3 : 1) * prefWeight(s, "avond") },
+        ];
+        if (!nightBlocked) {
+          candidates.push({ value: "nacht", weight: (nachtTekort ? 3 : 1) * prefWeight(s, "nacht") });
+        }
+        // Geen enkel tekort: laat de rotatiesuggestie (dag/avond/nacht over
+        // het blok heen) meespelen zodat er nog steeds variatie ontstaat.
+        if (!dagTekort && !avondTekort && !nachtTekort) {
+          candidates.forEach(c => { if (c.value === rotationSuggestion) c.weight *= 2.5; });
+        }
+        shiftType = weightedPick(candidates);
       }
 
       if (shiftType === null) {
@@ -376,10 +367,11 @@ function generateSchedule(staff, year, settings, holidays, vacations, existingSc
         i++; continue;
       }
 
-      schedule[s.id][ds] = shiftType;
+     schedule[s.id][ds] = shiftType;
       nightStreak = shiftType === "nacht" ? nightStreak + 1 : 0;
-      if (shiftType === "dag" || shiftType === "avond") dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
-      if (shiftType === "nacht")                        avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
+      if (shiftType === "dag")   dagNeed[ds]   = Math.max(0, dagNeed[ds]   - 1);
+      if (shiftType === "avond") avondNeed[ds] = Math.max(0, avondNeed[ds] - 1);
+      if (shiftType === "nacht") nachtNeed[ds] = Math.max(0, nachtNeed[ds] - 1);
       hoursAssigned[s.id] = (hoursAssigned[s.id] || 0) + getShift(shiftType).hours;
 
       blockPos++; i++;
@@ -813,19 +805,21 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
   const coverage=dates.map(date=>{
     const ds=toDS(date);
     const demand=getDayDemand(ds,settings,holidays,vacations);
-    let dag=0,avond=0;
+    let dag=0,avond=0,nacht=0;
     staff.forEach(s=>{ const sh=(schedule[s.id]||{})[ds];
-      if(sh==="dag"||sh==="avond") dag++;   // vroege periode
-      if(sh==="nacht")             avond++; // late periode
+      if(sh==="dag")   dag++;
+      if(sh==="avond") avond++;
+      if(sh==="nacht") nacht++;
     });
-    return{ds,dag,avond,demDag:demand.morning,demAvond:demand.evening};
+    return{ds,dag,avond,nacht,demDag:demand.morning,demAvond:demand.evening,demNacht:demand.night};
   });
 
   const alerts=[];
   coverage.forEach(c=>{
     const date=new Date(c.ds); const di=(date.getDay()+6)%7;
-    if(c.dag<c.demDag)   alerts.push({msg:`Dag tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.dag}/${c.demDag})`,ds:c.ds});
+    if(c.dag<c.demDag)     alerts.push({msg:`Dag tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.dag}/${c.demDag})`,ds:c.ds});
     if(c.avond<c.demAvond) alerts.push({msg:`Avond tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.avond}/${c.demAvond})`,ds:c.ds});
+    if(c.nacht<c.demNacht) alerts.push({msg:`Nacht tekort: ${DAYS_NL[di]} ${date.getDate()}/${date.getMonth()+1} (${c.nacht}/${c.demNacht})`,ds:c.ds});
   });
   const [alertsOpen,setAlertsOpen]=useState(false);
 
@@ -910,12 +904,16 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
             {flexi.length>0&&<tr><td colSpan={8} style={{background:"#0f172a",padding:"4px 8px",fontSize:10,color:"#6b7280",textTransform:"uppercase",letterSpacing:".1em"}}>Flexijobbers</td></tr>}
             {flexi.map(renderRow)}
             <tr className="coverage-row">
-              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Dag+Avond</td>
+              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Dag</td>
               {coverage.map((c,i)=>(<td key={i}><span className={c.dag>=c.demDag?"coverage-ok":c.dag>=c.demDag-1?"coverage-warn":"coverage-bad"}>{c.dag}/{c.demDag}</span></td>))}
             </tr>
             <tr className="coverage-row">
-              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Laat+Nacht</td>
+              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Avond</td>
               {coverage.map((c,i)=>(<td key={i}><span className={c.avond>=c.demAvond?"coverage-ok":c.avond>=c.demAvond-1?"coverage-warn":"coverage-bad"}>{c.avond}/{c.demAvond}</span></td>))}
+            </tr>
+            <tr className="coverage-row">
+              <td style={{fontSize:10,color:"var(--text-dim)",padding:"4px 8px",fontStyle:"italic"}}>Nacht</td>
+              {coverage.map((c,i)=>(<td key={i}><span className={c.nacht>=c.demNacht?"coverage-ok":c.nacht>=c.demNacht-1?"coverage-warn":"coverage-bad"}>{c.nacht}/{c.demNacht}</span></td>))}
             </tr>
           </tbody>
         </table>
@@ -935,8 +933,8 @@ function YearView({schedule,staff,year,holidays,vacations,settings,onDayClick}){
     for(let d=1;d<=dim;d++){
       const date=new Date(year,m,d); const ds=toDS(date);
       let cnt=0; staff.forEach(s=>{ const sh=(schedule[s.id]||{})[ds]; if(sh&&!["off","vacation","sick"].includes(sh)) cnt++; });
-      const demand=getDayDemand(ds,settings,holidays,vacations);
-      days.push({d,ds,cnt,min:demand.morning+demand.evening,isHol:isHoliday(ds,holidays),isVac:isSchoolVacation(ds,vacations),isWE:isWeekend(date)});
+     const demand=getDayDemand(ds,settings,holidays,vacations);
+      days.push({d,ds,cnt,min:demand.morning+demand.evening+demand.night,isHol:isHoliday(ds,holidays),isVac:isSchoolVacation(ds,vacations),isWE:isWeekend(date)});
     }
     return{name:MONTHS_NL[m],days};
   });
@@ -1129,9 +1127,9 @@ function StaffManager({staff,setStaff,schedule,year}){
 
 // ─── SETTINGS VIEW ────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS={
-  minMorning:3, minEvening:6,
-  weekendMinMorning:4, weekendMinEvening:8,
-  vacMinMorning:4, vacMinEvening:8,
+  minMorning:3, minEvening:3, minNight:3,
+  weekendMinMorning:4, weekendMinEvening:4, weekendMinNight:4,
+  vacMinMorning:4, vacMinEvening:4, vacMinNight:4,
   maxConsecNights:4, minRestAfterNights:2, maxConsecDays:5, minRestHours:11,
 };
 
@@ -1147,7 +1145,7 @@ function SettingsView({settings,setSettings,holidays,setHolidays,vacations,setVa
       <div className="settings-grid">
         <div className="settings-section">
           <div className="settings-title">⚙️ Bezettingsnormen</div>
-          {[["minMorning","Min. dag (normaal)"],["minEvening","Min. avond (normaal)"],["weekendMinMorning","Min. dag (weekend)"],["weekendMinEvening","Min. avond (weekend)"],["vacMinMorning","Min. dag (vakantie/feest)"],["vacMinEvening","Min. avond (vakantie/feest)"]].map(([k,l])=>(
+          {[["minMorning","Min. dag (normaal)"],["minEvening","Min. avond (normaal)"],["minNight","Min. nacht (normaal)"],["weekendMinMorning","Min. dag (weekend)"],["weekendMinEvening","Min. avond (weekend)"],["weekendMinNight","Min. nacht (weekend)"],["vacMinMorning","Min. dag (vakantie/feest)"],["vacMinEvening","Min. avond (vakantie/feest)"],["vacMinNight","Min. nacht (vakantie/feest)"]].map(([k,l])=>(
             <div key={k} className="form-row"><label className="form-label">{l}</label><input className="form-input" type="number" value={settings[k]||0} onChange={e=>upd(k,e.target.value)}/></div>
           ))}
         </div>
