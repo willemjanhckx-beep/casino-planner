@@ -1,5 +1,15 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 
+// Fonts zo vroeg mogelijk laden (module-scope = vóór eerste render) i.p.v. via
+// @import in de pas ná mount geïnjecteerde <style>, om font-flits te beperken.
+if (typeof document !== "undefined" && !document.getElementById("co3-fonts")) {
+  const fontLink = document.createElement("link");
+  fontLink.id = "co3-fonts";
+  fontLink.rel = "stylesheet";
+  fontLink.href = "https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap";
+  document.head.appendChild(fontLink);
+}
+
 const SUPABASE_URL = "https://edlcobufsarpzakzscpl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGNvYnVmc2FycHpha3pzY3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODI0NDAsImV4cCI6MjA5MjQ1ODQ0MH0.pZcav2FMpqYh2io57F1HGVAuhullZC89KB34qNUxBoQ";
 
@@ -719,7 +729,6 @@ function enforceRestRules(schedule, staff, year, settings, locks, lockDate) {
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const style=`
-@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{--gold:#c9a84c;--gold-dim:#8a6f2e;--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a28;--surface3:#22223a;--border:#2a2a42;--text:#e8e8f0;--text-dim:#888899;--red:#ef4444;--yellow:#f59e0b;--green:#22c55e;--blue:#3b82f6;--purple:#8b5cf6;}
 body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
@@ -748,7 +757,9 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .year-select:focus{outline:none;border-color:var(--gold-dim);}
 .btn{padding:7px 14px;border-radius:7px;font-size:12px;font-family:'DM Sans',sans-serif;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--text);transition:all .15s;display:flex;align-items:center;gap:6px;}
 .btn:hover{background:var(--surface3);border-color:var(--gold-dim);}
+.btn:active{transform:scale(.96);opacity:.85;}
 .btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn:disabled:active{transform:none;opacity:.4;}
 .btn-primary{background:var(--gold);color:#0a0a0f;border-color:var(--gold);}
 .btn-primary:hover{background:#e0b95a;}
 .btn-danger{border-color:#7f1d1d;color:var(--red);}
@@ -756,10 +767,11 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .btn-flex{background:#1f2937;border-color:#374151;color:#9ca3af;}
 .content{flex:1;overflow:auto;padding:24px;}
 @media(max-width:768px){.content{padding:12px;}}
-.week-grid{width:100%;border-collapse:collapse;}
-.week-grid th{background:var(--surface2);padding:8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);border:1px solid var(--border);font-weight:500;white-space:nowrap;}
+.week-grid{width:100%;border-collapse:collapse;border:1px solid var(--gold-dim);border-radius:8px;overflow:hidden;}
+.week-grid th{background:var(--surface2);padding:8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);border:1px solid #24243a;font-weight:500;white-space:nowrap;}
 .week-grid th.weekend{color:var(--gold);}
-.week-grid td{border:1px solid var(--border);padding:3px;vertical-align:top;min-width:88px;}
+.week-grid td{border:1px solid #1c1c2c;padding:3px;vertical-align:top;min-width:88px;}
+.week-grid tbody tr:nth-child(odd) .staff-cell{background:#15151f;}
 .staff-cell{background:var(--surface);padding:6px 8px;font-size:12px;font-weight:500;border-right:2px solid var(--border);white-space:nowrap;max-width:148px;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;z-index:2;}
 @media(max-width:768px){.staff-cell{max-width:80px;font-size:10px;}.week-grid td{min-width:58px;}.shift-cell{min-height:34px;padding:2px 3px;}.shift-label{font-size:10px;}.shift-time{display:none;}}
 .staff-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;}
@@ -1249,8 +1261,8 @@ function StaffStats({staff,schedule,year,holidays,migrationHours}){
   return(
     <div className="stats-grid">
       {computed.map(s=>{
-        const fc=s.fatigueScore>66?"#ef4444":s.fatigueScore>33?"#f59e0b":"#22c55e";
-        const hc=Math.abs(s.hr-1)<0.05?"#22c55e":Math.abs(s.hr-1)<0.15?"#f59e0b":"#ef4444";
+        const fc=s.fatigueScore>66?"var(--red)":s.fatigueScore>33?"var(--yellow)":"var(--green)";
+        const hc=Math.abs(s.hr-1)<0.05?"var(--green)":Math.abs(s.hr-1)<0.15?"var(--yellow)":"var(--red)";
         const vc=s.vr>1?"over":s.vr>0.8?"warn":"";
         return(
           <div key={s.id} className="stat-card">
@@ -1269,7 +1281,7 @@ function StaffStats({staff,schedule,year,holidays,migrationHours}){
             <div className="stat-row"><span>Weekend</span><span className="stat-val">{s.weekendShifts}</span></div>
             <div className="stat-row"><span>Nacht</span><span className="stat-val">{s.nightShifts}</span></div>
             <div className="stat-row"><span>Feestdagen</span><span className="stat-val">{s.holidayShifts}</span></div>
-            <div className="stat-row"><span>Vakantie</span><span className="stat-val" style={{color:s.vr>1?"#ef4444":s.vr>0.8?"#f59e0b":"#22c55e"}}>{s.vacUsed}/{s.vacationDays}</span></div>
+            <div className="stat-row"><span>Vakantie</span><span className="stat-val" style={{color:s.vr>1?"var(--red)":s.vr>0.8?"var(--yellow)":"var(--green)"}}>{s.vacUsed}/{s.vacationDays}</span></div>
             <div className="vac-bar"><div className={`vac-fill ${vc}`} style={{width:`${Math.min(100,s.vr*100)}%`}}/></div>
             <div className="stat-row" style={{marginTop:8}}><span>Vermoeidheid</span><span className="stat-val" style={{color:fc}}>{s.fatigueScore>66?"🔴 Hoog":s.fatigueScore>33?"🟡 Medium":"🟢 Laag"}</span></div>
             <div className="fatigue-bar"><div className="fatigue-fill" style={{width:`${s.fatigueScore}%`,background:fc}}/></div>
