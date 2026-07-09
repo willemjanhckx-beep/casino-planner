@@ -810,6 +810,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;}
 .toast{position:fixed;bottom:20px;right:20px;background:var(--surface2);border:1px solid var(--gold-dim);border-radius:8px;padding:12px 16px;font-size:13px;z-index:200;animation:slideIn .4s ease;max-width:340px;}
 .toast.motivatie{border:1.5px solid var(--gold);background:linear-gradient(135deg,#2a1f00,#1a1400,#12121a);color:var(--gold);padding:16px 20px;font-size:14px;bottom:28px;right:28px;border-radius:12px;box-shadow:0 0 24px #c9a84c40,0 8px 32px rgba(0,0,0,.6);animation:motivatieIn .5s cubic-bezier(.16,1,.3,1);}
+.toast.warn{border-color:var(--yellow);color:var(--yellow);}
 @keyframes slideIn{from{transform:translateY(20px);opacity:0;}to{transform:translateY(0);opacity:1;}}
 @keyframes motivatieIn{from{transform:translateY(28px) scale(.95);opacity:0;}to{transform:translateY(0) scale(1);opacity:1;}}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
@@ -1596,6 +1597,9 @@ export default function App(){
   const [isAppReady,setIsAppReady]=useState(false);
   const actionCount=useRef(0);
   const isLoaded=useRef(false);
+  const pendingSyncRef=useRef(false);
+  const latestRef=useRef(null);
+  useEffect(()=>{ latestRef.current={staff,schedule,settings,holidays,vacations,locks}; });
   const [loadingMsg]=useState(()=>LOADING_MSGS[Math.floor(Math.random()*LOADING_MSGS.length)]);
 
   // Auto-save lokaal
@@ -1637,9 +1641,12 @@ export default function App(){
 
   const handleYearChange=(y)=>{
     const yi=parseInt(y); setYear(yi);
-    if(HOLIDAYS_BY_YEAR[yi]) setHolidays(HOLIDAYS_BY_YEAR[yi]);
+    const hasData=!!HOLIDAYS_BY_YEAR[yi];
+    if(hasData) setHolidays(HOLIDAYS_BY_YEAR[yi]);
     if(VACATIONS_BY_YEAR[yi]) setVacations(VACATIONS_BY_YEAR[yi]);
-    setWeekNum(1); showToast(`📅 Jaar ${yi} geladen.`);
+    setWeekNum(1);
+    if(!hasData) showToast(`⚠️ Geen feestdagen/schoolvakanties bekend voor ${yi}. Vul dit zelf aan via Instellingen.`,"warn");
+    else showToast(`📅 Jaar ${yi} geladen.`);
   };
 
   const handleNavigateAlert=useCallback((ds)=>{
@@ -1765,17 +1772,17 @@ export default function App(){
         if(sv) setVacations(sv);
         if(sl) setLocks(sl);
         if(scR?.savedAt) save("co3_last_sync_savedAt",scR.savedAt);
-        setTimeout(()=>{ isLoaded.current=true; showToast("✅ Data geladen!"); },2000);
-      } else { isLoaded.current=true; }
-    }catch{ isLoaded.current=true; }
+        setTimeout(()=>{ isLoaded.current=true; showToast("✅ Data geladen!"); flushPendingSync(); },2000);
+      } else { isLoaded.current=true; flushPendingSync(); }
+    }catch{ isLoaded.current=true; flushPendingSync(); }
     finally{ setIsAppReady(true); }
-  },[]);
+  },[flushPendingSync]);
 
   useEffect(()=>{ loadFromSheets(); },[]);
 
   // Auto-save naar Supabase (debounced)
   useEffect(()=>{
-    if(!isLoaded.current) return;
+    if(!isLoaded.current){ pendingSyncRef.current=true; return; }
     const t=setTimeout(async()=>{
       setSyncStatus({state:"saving",time:null});
       try{
@@ -1785,6 +1792,17 @@ export default function App(){
     },2000);
     return()=>clearTimeout(t);
   },[staff,schedule,settings,holidays,vacations,locks]);
+
+  const flushPendingSync=useCallback(async()=>{
+    if(!pendingSyncRef.current||!latestRef.current) return;
+    pendingSyncRef.current=false;
+    const {staff,schedule,settings,holidays,vacations,locks}=latestRef.current;
+    setSyncStatus({state:"saving",time:null});
+    try{
+      await Promise.all([sbSet("staff",staff),sbSet("schedule",schedule),sbSet("settings",settings),sbSet("holidays",holidays),sbSet("vacations",vacations),sbSet("locks",locks)]);
+      setSyncStatus({state:"saved",time:new Date()});
+    }catch{ setSyncStatus({state:"error",time:null}); }
+  },[]);
 
   const weeksInYear=getWeeksInYear(year);
   const weekDates=getWeekDates(year,weekNum);
@@ -1905,7 +1923,7 @@ export default function App(){
           </div>
         </div>
       </div>
-      {toast&&<div className={`toast ${toast.type==="motivatie"?"motivatie":""}`} role="status" aria-live="polite">
+      {toast&&<div className={`toast ${toast.type==="motivatie"?"motivatie":toast.type==="warn"?"warn":""}`} role="status" aria-live="polite">
         {toast.type==="motivatie"&&<div style={{fontSize:10,textTransform:"uppercase",letterSpacing:".12em",marginBottom:6,opacity:.8,display:"flex",alignItems:"center",gap:6}}><span style={{animation:"spin 3s linear infinite",display:"inline-block"}}>🎰</span> Bericht voor Rami</div>}
         {toast.msg}
       </div>}
