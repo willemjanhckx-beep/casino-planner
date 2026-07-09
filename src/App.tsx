@@ -802,8 +802,8 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .month-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;}
 .month-title{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin-bottom:8px;}
 .month-days{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
-.day-dot{width:100%;aspect-ratio:1;border-radius:3px;font-size:8px;display:flex;align-items:center;justify-content:center;color:transparent;}
-.day-dot:hover{color:white;cursor:pointer;}
+.day-dot{width:100%;aspect-ratio:1;border-radius:3px;font-size:9px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.5);text-shadow:0 1px 1px rgba(0,0,0,.5);}
+.day-dot:hover{color:#fff;cursor:pointer;}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:100;overflow-y:auto;padding:20px;}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;}
 .modal-title{font-family:'DM Serif Display',serif;font-size:18px;color:var(--gold);margin-bottom:16px;}
@@ -836,10 +836,10 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .staff-card{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px;}
 .staff-card-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;font-weight:500;}
 .staff-card-days{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
-.staff-card-day{border-radius:6px;padding:5px 2px;text-align:center;cursor:pointer;position:relative;}
+.staff-card-day{border-radius:6px;padding:5px 2px;min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;cursor:pointer;position:relative;}
 .staff-card-day .d-label{font-size:8px;opacity:.7;font-family:'IBM Plex Mono',monospace;}
 .staff-card-day .d-shift{font-size:9px;font-weight:600;margin-top:2px;}
-@media(max-width:768px){.week-table-wrap{display:none;}.week-cards{display:block;}}
+@media(max-width:768px){.week-table-wrap{display:none;}.week-cards{display:block;}.year-grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr));}.day-dot{font-size:11px;}}
 `;
 // ─── SHIFT PICKER ─────────────────────────────────────────────────────────────
 function ShiftPicker({pos,onSelect,onClose,isLocked,onToggleLock}){
@@ -887,6 +887,11 @@ function WeekView({staff,schedule,setSchedule,weekNum,year,settings,holidays,vac
   const [suggestFor,setSuggestFor]=useState(null);
   const [bulkOpen,setBulkOpen]=useState(false);
   const [bulkForm,setBulkForm]=useState({staffId:staff[0]?.id||null,from:"",to:"",shiftType:"vacation"});
+  useEffect(()=>{
+    if(!staff.some(s=>s.id===bulkForm.staffId)){
+      setBulkForm(f=>({...f,staffId:staff[0]?.id||null}));
+    }
+  },[staff]);
   const dates=getWeekDates(year,weekNum);
 
   const assignSuggestion=useCallback((sid,ds,shiftType)=>{
